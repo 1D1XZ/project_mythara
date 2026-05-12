@@ -70,10 +70,10 @@ fun ChatScreen(
         ChatHeader(onOpenSettings = onOpenSettings, thinking = ui.thinking)
 
         Box(modifier = Modifier.weight(1f).fillMaxSize()) {
-            if (ui.messages.isEmpty() && ui.streaming.isNullOrEmpty()) {
+            if (ui.items.isEmpty() && ui.streaming.isNullOrEmpty()) {
                 EmptyStateHero(thinking = ui.thinking)
             } else {
-                Transcript(messages = ui.messages, streaming = ui.streaming)
+                Transcript(items = ui.items, streaming = ui.streaming)
             }
 
             ui.errorBanner?.let { msg ->
@@ -161,13 +161,11 @@ private fun EmptyStateHero(thinking: Boolean) {
 }
 
 @Composable
-private fun Transcript(messages: List<ChatViewModel.UiMessage>, streaming: String?) {
+private fun Transcript(items: List<ChatViewModel.ChatItem>, streaming: String?) {
     val listState = rememberLazyListState()
-    LaunchedEffect(messages.size, streaming) {
-        if (messages.isNotEmpty() || streaming != null) {
-            val idx = (messages.size + if (streaming != null) 1 else 0) - 1
-            if (idx >= 0) listState.animateScrollToItem(idx)
-        }
+    LaunchedEffect(items.size, streaming) {
+        val target = items.size + if (!streaming.isNullOrEmpty()) 1 else 0
+        if (target > 0) listState.animateScrollToItem(target - 1)
     }
     LazyColumn(
         state = listState,
@@ -176,31 +174,32 @@ private fun Transcript(messages: List<ChatViewModel.UiMessage>, streaming: Strin
             .padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        items(messages, key = { it.id }) { m -> MessageBubble(m) }
+        items(items, key = { it.key }) { item ->
+            when (item) {
+                is ChatViewModel.ChatItem.UserText -> TextBubble(role = "you", text = item.text, isUser = true)
+                is ChatViewModel.ChatItem.AssistantText -> TextBubble(role = "mythara", text = item.text, isUser = false)
+                is ChatViewModel.ChatItem.Tool -> ToolCallBubble(item)
+            }
+        }
         if (!streaming.isNullOrEmpty()) {
             item("streaming") {
-                MessageBubble(
-                    ChatViewModel.UiMessage(id = -1, role = "assistant", text = streaming + Glyph.AccentBar),
-                )
+                TextBubble(role = "mythara", text = streaming + Glyph.AccentBar, isUser = false)
             }
         }
     }
 }
 
 @Composable
-private fun MessageBubble(m: ChatViewModel.UiMessage) {
-    val isUser = m.role == "user"
+private fun TextBubble(role: String, text: String, isUser: Boolean) {
     val bg = if (isUser) MytharaColors.SurfaceMid else MytharaColors.Surface
-    val fg = MytharaColors.Fg
     val border = if (isUser) MytharaColors.Charple else MytharaColors.SurfaceHigh
     val align = if (isUser) Alignment.End else Alignment.Start
+    val accent = if (isUser) MytharaColors.Charple else MytharaColors.Bok
 
     Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = align) {
         Text(
-            text = if (isUser) "${Glyph.DiamondFilled} you" else "${Glyph.DiamondFilled} mythara",
-            style = MaterialTheme.typography.labelMedium.copy(
-                color = if (isUser) MytharaColors.Charple else MytharaColors.Bok,
-            ),
+            text = "${Glyph.DiamondFilled} $role",
+            style = MaterialTheme.typography.labelMedium.copy(color = accent),
             modifier = Modifier.padding(bottom = 2.dp),
         )
         Box(
@@ -210,7 +209,7 @@ private fun MessageBubble(m: ChatViewModel.UiMessage) {
                 .border(1.dp, border, RoundedCornerShape(10.dp))
                 .padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
-            Text(text = m.text, color = fg, style = MaterialTheme.typography.bodyMedium)
+            Text(text = text, color = MytharaColors.Fg, style = MaterialTheme.typography.bodyMedium)
         }
     }
 }
