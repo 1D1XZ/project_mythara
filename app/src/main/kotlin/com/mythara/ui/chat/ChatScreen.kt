@@ -2,6 +2,7 @@ package com.mythara.ui.chat
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,86 +11,140 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
 import com.mythara.ui.theme.Glyph
+import com.mythara.ui.theme.JetBrainsMono
 import com.mythara.ui.theme.MytharaColors
 import com.mythara.ui.theme.MytharaWordmark
 
 /**
- * M0/M1 chat scaffold. Renders the hero (wordmark + tagline + push-to-talk
- * placeholder) and an empty transcript area. Streaming chat, history, the
- * push-to-talk action, and the runtime selector are wired in M2+M3.
+ * Main chat surface. Pulls state from [ChatViewModel] and renders the
+ * Crush-styled timeline + composer + (when the assistant is streaming)
+ * a live bubble that grows token-by-token.
  *
- * Layout is three rows: header (titlebar height), transcript (flexible),
- * composer (bottom-anchored with mic ring).
+ * Push-to-talk + TTS land in M3; for M2 we use a plain text composer so
+ * MiniMax integration is testable end-to-end before adding voice on top.
  */
 @Composable
-fun ChatScreen(modifier: Modifier = Modifier) {
+fun ChatScreen(
+    onOpenSettings: () -> Unit = {},
+    vm: ChatViewModel = hiltViewModel(),
+) {
+    val ui by vm.ui.collectAsState()
     val insets = WindowInsets.systemBars.asPaddingValues()
+
     Column(
-        modifier = modifier
+        modifier = Modifier
             .fillMaxSize()
             .background(MytharaColors.Bg)
             .padding(insets),
     ) {
-        ChatHeader()
+        ChatHeader(onOpenSettings = onOpenSettings, thinking = ui.thinking)
+
         Box(modifier = Modifier.weight(1f).fillMaxSize()) {
-            EmptyStateHero()
+            if (ui.messages.isEmpty() && ui.streaming.isNullOrEmpty()) {
+                EmptyStateHero(thinking = ui.thinking)
+            } else {
+                Transcript(messages = ui.messages, streaming = ui.streaming)
+            }
+
+            ui.errorBanner?.let { msg ->
+                Banner(text = msg, color = MytharaColors.Sriracha, onDismiss = vm::dismissError,
+                    align = Alignment.TopCenter)
+            }
+            if (ui.needsApiKey) {
+                Banner(
+                    text = "${Glyph.AccentBar} paste your MiniMax API key in Settings to start chatting.",
+                    color = MytharaColors.Mustard, onDismiss = vm::dismissMissingKey,
+                    align = Alignment.TopCenter,
+                )
+            }
         }
-        Composer()
+
+        Composer(onSubmit = vm::submit, enabled = !ui.thinking)
     }
 }
 
 @Composable
-private fun ChatHeader() {
+private fun ChatHeader(onOpenSettings: () -> Unit, thinking: Boolean) {
     Row(
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         Text(
-            text = "${Glyph.DiamondFilled} mythara",
+            text = "${if (thinking) Glyph.Ellipsis else Glyph.DiamondFilled} mythara",
             style = MaterialTheme.typography.labelLarge.copy(
                 color = MytharaColors.Charple, fontWeight = FontWeight.Bold,
             ),
         )
-        Row(
-            modifier = Modifier
-                .clip(CircleShape)
-                .background(MytharaColors.Surface)
-                .border(1.dp, MytharaColors.SurfaceHigh, CircleShape)
-                .padding(horizontal = 10.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = "${Glyph.DiamondOutline} Assistive",
-                style = MaterialTheme.typography.labelMedium.copy(color = MytharaColors.FgMute),
-            )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .background(MytharaColors.Surface)
+                    .border(1.dp, MytharaColors.SurfaceHigh, CircleShape)
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
+            ) {
+                Text(
+                    text = "${Glyph.DiamondOutline} Assistive",
+                    style = MaterialTheme.typography.labelMedium.copy(color = MytharaColors.FgMute),
+                )
+            }
+            Spacer(Modifier.size(8.dp))
+            Box(
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .background(MytharaColors.Surface)
+                    .border(1.dp, MytharaColors.SurfaceHigh, CircleShape)
+                    .clickable(onClick = onOpenSettings)
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
+            ) {
+                Text(
+                    text = "${Glyph.DiamondOutline} settings",
+                    style = MaterialTheme.typography.labelMedium.copy(color = MytharaColors.FgMute),
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun EmptyStateHero() {
+private fun EmptyStateHero(thinking: Boolean) {
     Column(
         modifier = Modifier.fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        MytharaWordmark(shimmer = true, fontSize = 44.sp)
+        MytharaWordmark(shimmer = thinking || true, fontSize = 44.sp)
         Spacer(Modifier.height(16.dp))
         Text(
             text = "${Glyph.AccentBar} field intelligence in your pocket.",
@@ -99,32 +154,150 @@ private fun EmptyStateHero() {
         )
         Spacer(Modifier.height(28.dp))
         Text(
-            text = "hold the mic to talk ${Glyph.Arrow}",
+            text = "type a message ${Glyph.Arrow}",
             style = MaterialTheme.typography.bodySmall.copy(color = MytharaColors.FgMute),
         )
     }
 }
 
 @Composable
-private fun Composer() {
+private fun Transcript(messages: List<ChatViewModel.UiMessage>, streaming: String?) {
+    val listState = rememberLazyListState()
+    LaunchedEffect(messages.size, streaming) {
+        if (messages.isNotEmpty() || streaming != null) {
+            val idx = (messages.size + if (streaming != null) 1 else 0) - 1
+            if (idx >= 0) listState.animateScrollToItem(idx)
+        }
+    }
+    LazyColumn(
+        state = listState,
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        items(messages, key = { it.id }) { m -> MessageBubble(m) }
+        if (!streaming.isNullOrEmpty()) {
+            item("streaming") {
+                MessageBubble(
+                    ChatViewModel.UiMessage(id = -1, role = "assistant", text = streaming + Glyph.AccentBar),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MessageBubble(m: ChatViewModel.UiMessage) {
+    val isUser = m.role == "user"
+    val bg = if (isUser) MytharaColors.SurfaceMid else MytharaColors.Surface
+    val fg = MytharaColors.Fg
+    val border = if (isUser) MytharaColors.Charple else MytharaColors.SurfaceHigh
+    val align = if (isUser) Alignment.End else Alignment.Start
+
+    Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = align) {
+        Text(
+            text = if (isUser) "${Glyph.DiamondFilled} you" else "${Glyph.DiamondFilled} mythara",
+            style = MaterialTheme.typography.labelMedium.copy(
+                color = if (isUser) MytharaColors.Charple else MytharaColors.Bok,
+            ),
+            modifier = Modifier.padding(bottom = 2.dp),
+        )
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(10.dp))
+                .background(bg)
+                .border(1.dp, border, RoundedCornerShape(10.dp))
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+        ) {
+            Text(text = m.text, color = fg, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+@Composable
+private fun Composer(onSubmit: (String) -> Unit, enabled: Boolean) {
+    var draft by remember { mutableStateOf("") }
     Row(
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.Center,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Box(
             modifier = Modifier
-                .size(72.dp)
-                .clip(CircleShape)
+                .weight(1f)
+                .clip(RoundedCornerShape(22.dp))
                 .background(MytharaColors.Surface)
-                .border(2.dp, MytharaColors.Charple, CircleShape),
+                .border(1.dp, MytharaColors.SurfaceHigh, RoundedCornerShape(22.dp))
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+        ) {
+            BasicTextField(
+                value = draft,
+                onValueChange = { draft = it },
+                enabled = enabled,
+                singleLine = false,
+                cursorBrush = SolidColor(MytharaColors.Charple),
+                textStyle = TextStyle(
+                    color = MytharaColors.Fg,
+                    fontFamily = JetBrainsMono,
+                    fontSize = 14.sp,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+                decorationBox = { inner ->
+                    Box {
+                        if (draft.isEmpty()) {
+                            Text(
+                                "ask anything…",
+                                color = MytharaColors.FgDim,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                        inner()
+                    }
+                },
+            )
+        }
+        Box(
+            modifier = Modifier
+                .size(48.dp)
+                .clip(CircleShape)
+                .background(if (enabled && draft.isNotBlank()) MytharaColors.Charple else MytharaColors.Surface)
+                .border(1.dp, if (enabled && draft.isNotBlank()) MytharaColors.Charple else MytharaColors.SurfaceHigh, CircleShape)
+                .clickable(enabled = enabled && draft.isNotBlank()) {
+                    onSubmit(draft)
+                    draft = ""
+                },
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                text = Glyph.CircleFilled,
-                color = MytharaColors.Charple,
-                style = MaterialTheme.typography.titleLarge,
+                text = if (enabled) Glyph.Arrow else Glyph.Ellipsis,
+                color = if (enabled && draft.isNotBlank()) MytharaColors.Fg else MytharaColors.FgDim,
+                style = MaterialTheme.typography.titleMedium,
             )
         }
+    }
+}
+
+@Composable
+private fun Banner(
+    text: String,
+    color: androidx.compose.ui.graphics.Color,
+    onDismiss: () -> Unit,
+    align: Alignment,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(MytharaColors.Surface)
+            .border(1.dp, color, RoundedCornerShape(8.dp))
+            .clickable(onClick = onDismiss)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(text = text, color = color, style = MaterialTheme.typography.bodySmall)
     }
 }

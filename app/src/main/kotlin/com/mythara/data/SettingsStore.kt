@@ -1,0 +1,111 @@
+package com.mythara.data
+
+import android.content.Context
+import android.util.Base64
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
+import com.google.crypto.tink.Aead
+import com.google.crypto.tink.KeyTemplates
+import com.google.crypto.tink.aead.AeadConfig
+import com.google.crypto.tink.integration.android.AndroidKeysetManager
+import com.mythara.minimax.Region
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import javax.inject.Inject
+import javax.inject.Singleton
+
+/**
+ * Encrypted persistence for the user's MiniMax API key + chosen region +
+ * model. Uses Jetpack DataStore (preferences flavour) plus Google Tink
+ * AEAD with the wrapping key in the Android Keystore — the modern
+ * replacement for the now-deprecated EncryptedSharedPreferences.
+ *
+ * - The API key is base64(AEAD-encrypted-with-Tink) stored under
+ *   `apiKey.encrypted`. Tink's [AndroidKeysetManager] handles key
+ *   generation, rotation, and Keystore-backed wrapping.
+ * - Region and model are stored in plaintext — not sensitive, and
+ *   needed pre-decryption to render Settings.
+ * - The Tink keyset itself lives in `mythara_master_keyset` SharedPreferences,
+ *   wrapped by an Android Keystore key with alias `mythara_master_key`.
+ */
+@Singleton
+class SettingsStore @Inject constructor(
+    @ApplicationContext private val ctx: Context,
+) {
+    private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "mythara_settings")
+
+    private val keyApiKeyEncrypted = stringPreferencesKey("apiKey.encrypted")
+    private val keyRegion          = stringPreferencesKey("region")
+    private val keyModel           = stringPreferencesKey("model")
+
+    private val aead: Aead by lazy {
+        AeadConfig.register()
+        AndroidKeysetManager.Builder()
+            .withSharedPref(ctx, "mythara_master_keyset", "mythara_master_keyset_prefs")
+            .withKeyTemplate(KeyTemplates.get("AES256_GCM"))
+            .withMasterKeyUri("android-keystore://mythara_master_key")
+            .build()
+            .keysetHandle
+            .getPrimitive(Aead::class.java)
+    }
+
+    fun apiKeyFlow(): Flow<String?> = ctx.dataStore.data.map { prefs ->
+        prefs[keyApiKeyEncrypted]?.let { tryDecrypt(it) }
+    }
+
+    fun regionFlow(): Flow<Region> = ctx.dataStore.data.map { prefs ->
+        Region.fromId(prefs[keyRegion])
+    }
+
+    fun modelFlow(): Flow<String> = ctx.dataStore.data.map { prefs ->
+        prefs[keyModel] ?: DEFAULT_MODEL
+    }
+
+    suspend fun setApiKey(plain: String) {
+        val ct = aead.encrypt(plain.toByteArray(Charsets.UTF_8), null)
+        ctx.dataStore.edit { it[keyApiKeyEncrypted] = Base64.encodeToString(ct, Base64.NO_WRAP) }
+    }
+
+    suspend fun setRegion(region: Region) {
+        ctx.dataStore.edit { it[keyRegion] = region.name }
+    }
+
+    suspend fun setModel(model: String) {
+        ctx.dataStore.edit { it[keyModel] = model }
+    }
+
+    /** Convenience: a snapshot of the trio for the network layer. */
+    suspend fun snapshot(): Snapshot {
+        val prefs = ctx.dataStore.data.first()
+        return Snapshot(
+            apiKey = prefs[keyApiKeyEncrypted]?.let { tryDecrypt(it) },
+            region = Region.fromId(prefs[keyRegion]),
+            model = prefs[keyModel] ?: DEFAULT_MODEL,
+        )
+    }
+
+    private fun tryDecrypt(b64: String): String? = runCatching {
+        val pt = aead.decrypt(Base64.decode(b64, Base64.NO_WRAP), null)
+        String(pt, Charsets.UTF_8)
+    }.getOrNull()
+
+    data class Snapshot(val apiKey: String?, val region: Region, val model: String)
+
+    companion object {
+        /** Cheapest function-calling-capable model per the research brief. */
+        const val DEFAULT_MODEL: String = "MiniMax-M2"
+
+        val SUPPORTED_MODELS: List<String> = listOf(
+            "MiniMax-M2",
+            "MiniMax-M2.5",
+            "MiniMax-M2.7-highspeed",
+            "MiniMax-M1",
+            "MiniMax-VL-01",
+        )
+    }
+}

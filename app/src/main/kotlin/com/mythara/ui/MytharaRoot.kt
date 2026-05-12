@@ -5,25 +5,44 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
 import com.mythara.ui.chat.ChatScreen
-import com.mythara.ui.theme.MytharaTheme
+import com.mythara.ui.settings.SettingsScreen
 import com.mythara.ui.theme.MytharaColors
+import com.mythara.ui.theme.MytharaTheme
 
 /**
- * The single Compose root. Owns the theme and routes to the active screen.
+ * Compose root. Owns the theme + nav graph. Two routes for M2 — chat
+ * (home) and settings — wire up via a NavHost so chat → settings → back
+ * is a single navigation transaction with persisted state.
  *
- * M0/M1 routes through ChatScreen directly. Later milestones (M4 onboarding,
- * M2 settings, M8 secret) layer in a NavHost.
+ * Later routes (About → Secret unlock → Secret settings → Observe vault)
+ * compose into the same NavHost in M8.
  */
 @Composable
 fun MytharaRoot() {
+    val nav = rememberNavController()
     MytharaTheme {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(MytharaColors.Bg)
+                .background(MytharaColors.Bg),
         ) {
-            ChatScreen()
+            NavHost(navController = nav, startDestination = Routes.Chat) {
+                composable(Routes.Chat) {
+                    ChatScreen(onOpenSettings = { nav.navigate(Routes.Settings) })
+                }
+                composable(Routes.Settings) {
+                    SettingsScreen(onBack = { nav.popBackStack() })
+                }
+            }
         }
     }
+}
+
+object Routes {
+    const val Chat = "chat"
+    const val Settings = "settings"
 }
