@@ -3,6 +3,7 @@ package com.mythara.ui.chat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mythara.agent.AgentLoop
+import com.mythara.agent.SpokenText
 import com.mythara.agent.Thinks
 import com.mythara.data.HistoryRepository
 import com.mythara.data.MessageRow
@@ -114,11 +115,14 @@ class ChatViewModel @Inject constructor(
                     }
                     is AgentLoop.Turn.Finished -> {
                         _ui.update { it.copy(streaming = null, thinking = false) }
-                        // Strip <think>…</think> blocks before speaking — the
-                        // reasoning trace is rendered as Thought bubbles in
-                        // the UI but should not be read aloud.
-                        val spoken = Thinks.strip(turn.finalText)
+                        // Two-step normalisation before TTS:
+                        //  1. Thinks.strip   — remove <think>…</think> reasoning blocks
+                        //  2. SpokenText.forSpeech — strip markdown (bold/italic/code/
+                        //     headings/bullets/links/tables) so the speech engine
+                        //     doesn't read literal "asterisk asterisk".
+                        val cleaned = Thinks.strip(turn.finalText)
                             .removeSuffix(" [hit max iterations]")
+                        val spoken = SpokenText.forSpeech(cleaned)
                         if (spoken.isNotBlank()) tts.speak(spoken)
                     }
                     is AgentLoop.Turn.Error -> _ui.update {
