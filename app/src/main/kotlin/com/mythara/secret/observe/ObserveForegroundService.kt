@@ -169,19 +169,30 @@ class ObserveForegroundService : Service() {
 
         private const val TAG = "Mythara/Observe"
         private const val NOTIFICATION_ID = 4201
-        private const val CHANNEL_ID = "mythara.observe.service"
+        // v2 — original v1 was created with IMPORTANCE_MIN which on some
+        // Pixel devices completely hides the status-bar icon. The channel's
+        // importance can't be promoted programmatically once set; we have
+        // to use a new channel id. The old `mythara.observe.service` will
+        // be deleted on first launch.
+        private const val CHANNEL_ID = "mythara.observe.service.v2"
+        private const val LEGACY_CHANNEL_ID = "mythara.observe.service"
         private const val HEARTBEAT_INTERVAL_MS = 30_000L
 
         fun ensureChannel(ctx: Context) {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
             val mgr = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            // Reap legacy channel if present so the user doesn't see a stale
+            // "off" entry under app notification settings.
+            if (mgr.getNotificationChannel(LEGACY_CHANNEL_ID) != null) {
+                mgr.deleteNotificationChannel(LEGACY_CHANNEL_ID)
+            }
             if (mgr.getNotificationChannel(CHANNEL_ID) != null) return
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "Mythara service",
-                NotificationManager.IMPORTANCE_MIN,
+                "Mythara background",
+                NotificationManager.IMPORTANCE_LOW,
             ).apply {
-                description = "Persistent indicator that Mythara background service is running."
+                description = "Persistent indicator while Mythara's background service is running."
                 setShowBadge(false)
                 enableLights(false); enableVibration(false)
                 lockscreenVisibility = Notification.VISIBILITY_SECRET

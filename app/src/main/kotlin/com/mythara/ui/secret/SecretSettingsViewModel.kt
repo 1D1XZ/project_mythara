@@ -3,6 +3,7 @@ package com.mythara.ui.secret
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.Build
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -31,8 +32,13 @@ class SecretSettingsViewModel @Inject constructor(
     data class State(
         val observeState: ObserveState = ObserveState.Idle,
         val micGranted: Boolean = false,
+        val notifGranted: Boolean = false,
+        /** True on Android < 13: notification permission is implicit, no prompt needed. */
+        val notifRequired: Boolean = false,
         val confirmingForget: Boolean = false,
-    )
+    ) {
+        val readyToStart: Boolean get() = micGranted && (!notifRequired || notifGranted)
+    }
 
     private val _state = MutableStateFlow(State(observeState = store.state.value))
     val state: StateFlow<State> = _state.asStateFlow()
@@ -47,10 +53,22 @@ class SecretSettingsViewModel @Inject constructor(
     }
 
     fun refreshPermission() {
-        val granted = ContextCompat.checkSelfPermission(
+        val mic = ContextCompat.checkSelfPermission(
             ctx, Manifest.permission.RECORD_AUDIO,
         ) == PackageManager.PERMISSION_GRANTED
-        _state.update { it.copy(micGranted = granted) }
+        val notifNeeded = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+        val notif = if (notifNeeded) {
+            ContextCompat.checkSelfPermission(
+                ctx, Manifest.permission.POST_NOTIFICATIONS,
+            ) == PackageManager.PERMISSION_GRANTED
+        } else true
+        _state.update {
+            it.copy(
+                micGranted = mic,
+                notifGranted = notif,
+                notifRequired = notifNeeded,
+            )
+        }
     }
 
     fun toggleObserve() {

@@ -1,6 +1,7 @@
 package com.mythara.ui.secret
 
 import android.Manifest
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -59,6 +60,9 @@ fun SecretSettingsScreen(
     val micPermLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { _ -> vm.refreshPermission() }
+    val notifPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { _ -> vm.refreshPermission() }
 
     Column(
         modifier = Modifier
@@ -112,24 +116,54 @@ fun SecretSettingsScreen(
 
         Spacer(Modifier.height(14.dp))
 
-        Panel("microphone access") {
+        Panel("permissions") {
+            // Microphone
             if (state.micGranted) {
                 Text(
-                    text = "${Glyph.Check} granted",
+                    text = "${Glyph.Check} microphone — granted",
                     color = MytharaColors.Julep, style = MaterialTheme.typography.bodyMedium,
                 )
             } else {
                 Text(
-                    text = "${Glyph.Cross} not granted — Observe can't start without it.",
+                    text = "${Glyph.Cross} microphone — needed for the (incoming m8.1b) ASR pipeline.",
                     color = MytharaColors.Sriracha, style = MaterialTheme.typography.bodyMedium,
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(6.dp))
                 Button(
                     onClick = { micPermLauncher.launch(Manifest.permission.RECORD_AUDIO) },
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MytharaColors.Charple, contentColor = MytharaColors.Fg,
                     ),
                 ) { Text("${Glyph.Arrow} grant microphone") }
+            }
+
+            // Notification (Android 13+) — without this the persistent
+            // "Mythara is running" notification is silently blocked and
+            // the foreground service runs invisibly.
+            if (state.notifRequired) {
+                Spacer(Modifier.height(10.dp))
+                if (state.notifGranted) {
+                    Text(
+                        text = "${Glyph.Check} notifications — granted",
+                        color = MytharaColors.Julep, style = MaterialTheme.typography.bodyMedium,
+                    )
+                } else {
+                    Text(
+                        text = "${Glyph.Cross} notifications — Android 13+ blocks the persistent service notification without this. Observe will still run but you won't see the indicator.",
+                        color = MytharaColors.Sriracha, style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Button(
+                        onClick = {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MytharaColors.Charple, contentColor = MytharaColors.Fg,
+                        ),
+                    ) { Text("${Glyph.Arrow} grant notifications") }
+                }
             }
         }
 
@@ -145,7 +179,7 @@ fun SecretSettingsScreen(
             ) {
                 Button(
                     onClick = { vm.toggleObserve() },
-                    enabled = state.micGranted && state.observeState !is ObserveState.Stopping,
+                    enabled = state.readyToStart && state.observeState !is ObserveState.Stopping,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = if (active) MytharaColors.Sriracha else MytharaColors.Bok,
                         contentColor = MytharaColors.Bg,
