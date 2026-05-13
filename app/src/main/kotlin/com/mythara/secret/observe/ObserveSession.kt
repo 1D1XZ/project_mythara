@@ -6,6 +6,7 @@ import com.mythara.growth.LearningJournal
 import com.mythara.memory.Tier
 import com.mythara.secret.observe.embed.EmbeddingsModelStore
 import com.mythara.secret.observe.embed.LocalEmbedder
+import com.mythara.mic.MicBroker
 import com.mythara.secret.observe.extract.LumiNoteDetector
 import com.mythara.secret.observe.extract.SemanticExtractor
 import com.mythara.secret.observe.speaker.SpeakerVault
@@ -58,6 +59,7 @@ class ObserveSession @Inject constructor(
     private val extractor: SemanticExtractor,
     private val journal: LearningJournal,
     private val speakerVault: SpeakerVault,
+    private val micBroker: MicBroker,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var job: Job? = null
@@ -72,8 +74,18 @@ class ObserveSession @Inject constructor(
         if (isRunning) return Result.success(Unit)
         if (!asr.isReady()) return Result.failure(IllegalStateException("Vosk model not ready"))
 
+        // Acquire the mic via the broker FIRST. If another mode (Lumi
+        // wake-word listener / continuous voice chat) is currently
+        // holding it, refuse cleanly with a clear error — UI surfaces
+        // this so the user can toggle the other mode off.
+        if (!micBroker.acquire(MicBroker.Client.OBSERVE)) {
+            val current = micBroker.owner.value?.let { micBroker.describe(it) } ?: "another client"
+            return Result.failure(IllegalStateException("Microphone busy — $current is using it"))
+        }
+
         val recorder = AudioRecorder()
         if (!recorder.start()) {
+            micBroker.release(MicBroker.Client.OBSERVE)
             return Result.failure(IllegalStateException("AudioRecord init failed"))
         }
         val recognizer = runCatching { asr.newRecognizer() }.getOrElse {
@@ -119,6 +131,7 @@ class ObserveSession @Inject constructor(
                 runCatching { recognizer.close() }
                 recorder.stop()
                 recorder.release()
+                micBroker.release(MicBroker.Client.OBSERVE)
                 Log.d(TAG, "session ended; transcripts=$transcriptCount")
             }
         }

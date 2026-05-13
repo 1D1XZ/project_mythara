@@ -33,6 +33,7 @@ class ChatViewModel @Inject constructor(
     private val tts: Tts,
     private val languageDetector: LanguageDetector,
     lumiListenerStore: com.mythara.wake.LumiListenerStore,
+    val micBroker: com.mythara.mic.MicBroker,
 ) : ViewModel() {
     // `_ui` is declared up top so any init block can safely call
     // `_ui.update { ... }` — Kotlin runs property initialisers + init

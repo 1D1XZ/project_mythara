@@ -47,6 +47,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import com.mythara.mic.ContinuousSpeechRecognition
+import com.mythara.mic.MicBroker
 import com.mythara.mic.SpeechRecognition
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -110,6 +111,13 @@ fun ChatScreen(
             permLauncher.launch(Manifest.permission.RECORD_AUDIO)
             return@LaunchedEffect
         }
+        // Coordinate with the mic broker so Observe / Lumi-listen can't
+        // steal the mic mid-utterance. If acquire fails, flip the toggle
+        // back off — UI will then show the conflict via the same flow.
+        if (!vm.micBroker.acquire(MicBroker.Client.CONTINUOUS_CHAT)) {
+            vm.setContinuousMode(false)
+            return@LaunchedEffect
+        }
 
         // Pending-utterance buffer. Each Soda Final appends to it;
         // a 5-second silence (no Partial since the last word) triggers
@@ -131,28 +139,34 @@ fun ChatScreen(
             }
         }
 
-        ContinuousSpeechRecognition.listenContinuously(ctx).collect { ev ->
-            when (ev) {
-                is SpeechRecognition.Event.Partial -> {
-                    // User is still speaking — push the silence-timer
-                    // out. The Final will land in a moment.
-                    commitJob?.cancel()
-                }
-                is SpeechRecognition.Event.Final -> {
-                    val text = ev.text.trim()
-                    if (text.isNotBlank()) {
-                        if (pending.isNotEmpty()) pending.append(' ')
-                        pending.append(text)
-                        resetCommitTimer()
+        try {
+            ContinuousSpeechRecognition.listenContinuously(ctx).collect { ev ->
+                when (ev) {
+                    is SpeechRecognition.Event.Partial -> {
+                        // User is still speaking — push the silence-timer
+                        // out. The Final will land in a moment.
+                        commitJob?.cancel()
                     }
-                }
-                is SpeechRecognition.Event.Error -> {
-                    if (!ContinuousSpeechRecognition.isTransient(ev.code)) {
-                        android.util.Log.w("Mythara/Chat", "continuous SR error: ${ev.message}")
+                    is SpeechRecognition.Event.Final -> {
+                        val text = ev.text.trim()
+                        if (text.isNotBlank()) {
+                            if (pending.isNotEmpty()) pending.append(' ')
+                            pending.append(text)
+                            resetCommitTimer()
+                        }
                     }
+                    is SpeechRecognition.Event.Error -> {
+                        if (!ContinuousSpeechRecognition.isTransient(ev.code)) {
+                            android.util.Log.w("Mythara/Chat", "continuous SR error: ${ev.message}")
+                        }
+                    }
+                    else -> { /* Ready / EndOfSpeech — no-op */ }
                 }
-                else -> { /* Ready / EndOfSpeech — no-op */ }
             }
+        } finally {
+            // Always release the mic when the collector unwinds, whether
+            // from toggling off, screen exit, or TTS-paused recompose.
+            vm.micBroker.release(MicBroker.Client.CONTINUOUS_CHAT)
         }
     }
 

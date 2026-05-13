@@ -13,6 +13,7 @@ import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.mythara.MainActivity
+import com.mythara.mic.MicBroker
 import com.mythara.secret.observe.AudioRecorder
 import com.mythara.secret.observe.extract.LumiNoteDetector
 import com.mythara.secret.observe.vosk.VoskAsr
@@ -54,6 +55,7 @@ class LumiListenerService : Service() {
 
     @Inject lateinit var asr: VoskAsr
     @Inject lateinit var store: LumiListenerStore
+    @Inject lateinit var micBroker: MicBroker
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var loopJob: Job? = null
@@ -92,12 +94,17 @@ class LumiListenerService : Service() {
             return
         }
         store.setState(LumiListenerStore.State.Starting)
+        if (!micBroker.acquire(MicBroker.Client.LUMI_LISTEN)) {
+            val owner = micBroker.owner.value?.let { micBroker.describe(it) } ?: "another mode"
+            store.setState(LumiListenerStore.State.Error("Microphone busy — $owner is using it"))
+            stopSelf()
+            return
+        }
         val recorder = AudioRecorder()
         if (!recorder.start()) {
+            micBroker.release(MicBroker.Client.LUMI_LISTEN)
             store.setState(
-                LumiListenerStore.State.Error(
-                    "Microphone busy — Observe mode is using it",
-                ),
+                LumiListenerStore.State.Error("AudioRecord init failed"),
             )
             recorder.release()
             stopSelf()
@@ -137,6 +144,7 @@ class LumiListenerService : Service() {
                 runCatching { recognizer.close() }
                 recorder.stop()
                 recorder.release()
+                micBroker.release(MicBroker.Client.LUMI_LISTEN)
                 Log.d(TAG, "Lumi always-listen stopped")
             }
         }
