@@ -124,8 +124,9 @@ class ElevenLabsTtsService @Inject constructor(
         }
         result.use { res ->
             if (!res.isSuccessful) {
-                val errBody = res.body?.string()?.take(400).orEmpty()
-                Log.w(TAG, "ElevenLabs ${res.code}: $errBody")
+                val errBody = res.body?.string().orEmpty()
+                val parsed = parseElevenLabsError(errBody) ?: errBody.take(160)
+                Log.w(TAG, "ElevenLabs synth ${res.code}: $parsed")
                 return@withContext null
             }
             val dir = File(ctx.filesDir, TTS_DIR).apply { mkdirs() }
@@ -213,14 +214,21 @@ class ElevenLabsTtsService @Inject constructor(
     }
 
     /**
-     * Cheap one-shot key probe — GET /v1/user requires only a valid
-     * API key and a free subscription. Confirms the key is real
-     * before we burn TTS credits on the first reply.
+     * Cheap one-shot key probe. Uses `/v1/models` rather than the
+     * earlier `/v1/user` because most scoped ElevenLabs keys (in
+     * particular TTS-only keys generated from the API key UI with
+     * limited permissions) lack the `user_read` permission and 401
+     * on `/v1/user` even when they're perfectly fine for synthesis.
+     * `/v1/models` works for every key tier we care about.
+     *
+     * Parses the JSON error body when ElevenLabs returns 4xx so the
+     * UI can surface "Invalid API key" / "Missing permission X" /
+     * "Free tier exceeded" instead of an opaque `HTTP 401`.
      */
     suspend fun validate(apiKey: String): Outcome = withContext(Dispatchers.IO) {
         if (apiKey.isBlank()) return@withContext Outcome(false, "empty key", "empty")
         val req = Request.Builder()
-            .url("$BASE_URL/v1/user")
+            .url("$BASE_URL/v1/models")
             .addHeader("xi-api-key", apiKey)
             .get()
             .build()
@@ -228,9 +236,60 @@ class ElevenLabsTtsService @Inject constructor(
             return@withContext Outcome(false, it.message ?: "network failure", "network")
         }
         result.use { res ->
-            if (res.isSuccessful) Outcome(true, "key OK")
-            else Outcome(false, "HTTP ${res.code}", "http_${res.code}")
+            if (res.isSuccessful) {
+                return@withContext Outcome(true, "key OK · models endpoint reachable")
+            }
+            val raw = res.body?.string().orEmpty()
+            val parsedMsg = parseElevenLabsError(raw)
+            val detail = parsedMsg ?: when (res.code) {
+                401 -> "API key rejected — copy a fresh key from elevenlabs.io/app/settings/api-keys"
+                403 -> "API key valid but missing permissions for this endpoint"
+                429 -> "Free-tier rate limit hit — wait a minute and re-validate"
+                else -> "HTTP ${res.code}"
+            }
+            Log.w(TAG, "validate ${res.code}: $raw")
+            Outcome(false, detail, "http_${res.code}")
         }
+    }
+
+    /**
+     * ElevenLabs returns errors as one of:
+     *   {"detail":"Invalid API key"}
+     *   {"detail":{"status":"missing_permissions","message":"..."}}
+     *   {"detail":[{"loc":[...], "msg":"...", "type":"..."}]} (FastAPI 422)
+     *
+     * We pull a human-readable string out of whichever shape we get,
+     * returning null when we can't make sense of the body (caller
+     * falls back to a generic HTTP-code message).
+     */
+    private fun parseElevenLabsError(raw: String): String? {
+        if (raw.isBlank()) return null
+        return runCatching {
+            val element = json.parseToJsonElement(raw)
+            val detail = (element as? kotlinx.serialization.json.JsonObject)?.get("detail")
+                ?: return@runCatching null
+            when {
+                detail is kotlinx.serialization.json.JsonPrimitive -> detail.content
+                detail is kotlinx.serialization.json.JsonObject -> {
+                    val msg = (detail["message"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+                    val status = (detail["status"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+                    when {
+                        msg != null && status != null -> "$status — $msg"
+                        msg != null -> msg
+                        status != null -> status
+                        else -> detail.toString().take(160)
+                    }
+                }
+                detail is kotlinx.serialization.json.JsonArray -> {
+                    detail.firstOrNull()
+                        ?.let { it as? kotlinx.serialization.json.JsonObject }
+                        ?.get("msg")
+                        ?.let { it as? kotlinx.serialization.json.JsonPrimitive }
+                        ?.content
+                }
+                else -> null
+            }
+        }.getOrNull()
     }
 
     /**
