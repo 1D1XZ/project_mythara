@@ -57,13 +57,15 @@ class ScreenshotViewTool @Inject constructor(
 
     override val name: String = "screenshot_view"
     override val description: String =
-        "Capture the currently-displayed screen and describe what's on it via the configured vision model. " +
-            "Use after open_app or after a UI transition when you need to SEE the screen content beyond what read_screen surfaces — " +
-            "specifically: image messages in chat apps (WhatsApp / Messages / Signal), Canvas-rendered text, " +
-            "verifying a UI state before tapping. Returns a description + the rough on-screen text from the accessibility tree. " +
+        "PRIMARY tool for seeing screen CONTENT — captures actual pixels via the configured vision model. " +
+            "Returns a natural-language description of what's visible: messages, images shared inline, " +
+            "any photo or graphic content. Use this whenever you need to KNOW WHAT'S ON SCREEN, " +
+            "ESPECIALLY in chat apps where images, stickers, and media are part of the conversation. " +
+            "READ_SCREEN IS NOT A SUBSTITUTE — read_screen only walks the accessibility tree and returns text labels; " +
+            "it CANNOT see image content. WhatsApp / Messages / Signal mark images as bare 'Photo' nodes in " +
+            "the accessibility tree with no description. To actually see the picture you must use screenshot_view. " +
             "Read-only — never sends or taps. Always allowed regardless of autopilot state. " +
-            "Pair with read_screen for full context: this tool answers \"what does the picture say\" while read_screen " +
-            "answers \"which buttons / fields are tappable.\""
+            "Use read_screen ONLY when you need to find tap coordinates for a specific UI element."
 
     override val parameters: JsonObject = buildJsonObject {
         put("type", "object")
