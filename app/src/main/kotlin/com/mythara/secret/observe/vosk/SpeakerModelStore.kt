@@ -72,8 +72,14 @@ class SpeakerModelStore @Inject constructor(
     private val zipTmp: File get() = ctx.cacheDir.resolve("$MODEL_NAME.zip")
     private val zipMarker: File get() = ctx.cacheDir.resolve("$MODEL_NAME.zip.size")
 
-    /** Speaker models extract to a directory with `final.raw` at minimum. */
-    fun isExtracted(): Boolean = modelDir.resolve("final.raw").exists()
+    /**
+     * Speaker models extract with `final.ext.raw` (the main model
+     * weights) and `mean.vec` (the normaliser). Both are required;
+     * checking either is sufficient since extract is atomic from
+     * our side — if one's there, all of them are.
+     */
+    fun isExtracted(): Boolean = modelDir.resolve("final.ext.raw").exists() &&
+        modelDir.resolve("mean.vec").exists()
 
     fun pathOrNull(): String? = if (isExtracted()) modelDir.absolutePath else null
 
