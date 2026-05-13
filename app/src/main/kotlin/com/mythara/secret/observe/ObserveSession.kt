@@ -7,6 +7,7 @@ import com.mythara.memory.Tier
 import com.mythara.secret.observe.embed.EmbeddingsModelStore
 import com.mythara.secret.observe.embed.LocalEmbedder
 import com.mythara.secret.observe.extract.LearningExtractor
+import com.mythara.secret.observe.extract.LumiNoteDetector
 import com.mythara.secret.observe.vault.LearningVault
 import com.mythara.secret.observe.vosk.VoskAsr
 import kotlinx.coroutines.CoroutineScope
@@ -168,9 +169,40 @@ class ObserveSession @Inject constructor(
             now = now,
         )
 
-        // 2. Heuristic-extracted semantic facts. These DO sync — they're
-        //    durable observations about the user, not raw audio content.
-        //    Quality is coarse today; M8.2.1 replaces this with Gemma.
+        // 2a. Explicit "Hey Lumi, ..." notes. Always conf=1.0 because the
+        //     user literally addressed the assistant; no probabilistic
+        //     extraction needed. We still let the Gemma/heuristic
+        //     extractor run below in case the same utterance carries
+        //     implicit facts as well — e.g. "Lumi, note that I prefer
+        //     dark roast" both records the deliberate note AND
+        //     reinforces the preference.
+        var explicitNoteCount = 0
+        LumiNoteDetector.detect(text)?.let { noteText ->
+            val noteEmbedding = if (embedder.isReady()) {
+                runCatching { embedder.embed(noteText) }.getOrNull()
+            } else null
+            val added = vault.add(
+                content = noteText,
+                tier = Tier.Semantic,
+                src = "observe:note-to-lumi",
+                facets = listOf(
+                    "kind:explicit-note",
+                    "addressed:lumi",
+                ),
+                embedding = noteEmbedding,
+                embModel = if (noteEmbedding != null) EmbeddingsModelStore.MODEL_ID else null,
+                ref = refId,
+                conf = 1.0,
+                now = now,
+            )
+            if (added) explicitNoteCount += 1
+            Log.d(TAG, "Lumi note captured: ${noteText.take(80)}")
+        }
+
+        // 2b. Heuristic / Gemma-extracted semantic facts. These DO sync —
+        //     they're durable observations about the user, not raw audio
+        //     content. Quality is coarse on the heuristic path; the
+        //     Gemma extractor takes over when its model is loaded.
         var semanticCount = 0
         for (fact in extractor.extract(text)) {
             val factEmbedding = if (embedder.isReady()) {
@@ -193,11 +225,17 @@ class ObserveSession @Inject constructor(
         // Metadata-only journal entry — never the transcript text.
         val wordCount = text.split(Regex("\\s+")).filter { it.isNotBlank() }.size
         val embedNote = transcriptEmbedding?.let { "${it.size}-dim emb" } ?: "no emb"
+        val noteSummary = buildString {
+            append("captured transcript ($wordCount words, $embedNote, ")
+            append("$semanticCount semantic facts")
+            if (explicitNoteCount > 0) append(", $explicitNoteCount Lumi note")
+            append(")")
+        }
         journal.append(
             LearningJournal.Entry(
                 tsMillis = now,
                 kind = "observe",
-                note = "captured transcript ($wordCount words, $embedNote, $semanticCount semantic facts)",
+                note = noteSummary,
             ),
         )
     }
