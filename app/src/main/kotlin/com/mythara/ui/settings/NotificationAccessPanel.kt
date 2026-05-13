@@ -36,6 +36,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.mythara.services.NotificationActionStore
 import com.mythara.services.NotificationAutoProcessStore
 import com.mythara.services.NotificationListener
 import com.mythara.ui.theme.Glyph
@@ -48,18 +49,27 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
- * Tiny VM for the auto-process toggle. Lives next to the panel because
- * it's the only consumer.
+ * Tiny VM for the two notification-mode toggles (read-aloud +
+ * smart auto-action). Lives next to the panel because it's the
+ * only consumer.
  */
 @HiltViewModel
 class NotificationAutoProcessViewModel @Inject constructor(
     private val store: NotificationAutoProcessStore,
+    private val actionStore: NotificationActionStore,
 ) : ViewModel() {
     val enabled: StateFlow<Boolean> = store.enabledFlow()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), false)
 
+    val autoActionEnabled: StateFlow<Boolean> = actionStore.enabledFlow()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), false)
+
     fun setEnabled(value: Boolean) {
         viewModelScope.launch { store.setEnabled(value) }
+    }
+
+    fun setAutoActionEnabled(value: Boolean) {
+        viewModelScope.launch { actionStore.setEnabled(value) }
     }
 }
 
@@ -81,6 +91,7 @@ fun NotificationAccessPanel(
     val lifecycleOwner = LocalLifecycleOwner.current
     val runtimeEnabled by NotificationListener.isEnabled.collectAsState()
     val autoProcess by vm.enabled.collectAsState()
+    val autoAction by vm.autoActionEnabled.collectAsState()
     var listed by remember { mutableStateOf(isNotificationAccessListed(ctx)) }
     LaunchedEffect(lifecycleOwner) {
         val obs = LifecycleEventObserver { _, event ->
@@ -174,6 +185,37 @@ fun NotificationAccessPanel(
         }
         Text(
             text = "${Glyph.AccentBar} when on, every new notification (skipping ongoing pings and Mythara's own) is funnelled through the agent — Lumi summarises in ≤15 words and speaks it out. Reply 'NOSURFACE' from the model silently drops noise. Burns MiniMax tokens on every push, so it's off by default.",
+            color = MytharaColors.FgDim,
+            style = MaterialTheme.typography.bodySmall,
+        )
+
+        // ----- Smart auto-action toggle -----
+        Spacer(Modifier.height(14.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(enabled = ready) { vm.setAutoActionEnabled(!autoAction) }
+                .padding(vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = if (autoAction) Glyph.CircleFilled else Glyph.CircleOutline,
+                color = when {
+                    !ready -> MytharaColors.FgDim
+                    autoAction -> MytharaColors.Charple
+                    else -> MytharaColors.FgMute
+                },
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Spacer(Modifier.padding(end = 8.dp))
+            Text(
+                text = "smart auto-action (learn what to dismiss)",
+                color = if (ready) MytharaColors.Fg else MytharaColors.FgDim,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        Text(
+            text = "${Glyph.AccentBar} Mythara watches which apps' notifications you usually swipe away. After 3+ dismisses with a 70%+ dismissal rate per app, it auto-dismisses new ones from that app before they distract you. Ask Lumi 'what did you dismiss?' to see the log. Doesn't auto-reply to messages yet — that's coming.",
             color = MytharaColors.FgDim,
             style = MaterialTheme.typography.bodySmall,
         )

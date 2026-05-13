@@ -35,6 +35,7 @@ class ChatViewModel @Inject constructor(
     lumiListenerStore: com.mythara.wake.LumiListenerStore,
     val micBroker: com.mythara.mic.MicBroker,
     notifAutoProcessStore: com.mythara.services.NotificationAutoProcessStore,
+    private val notifDecisionEngine: com.mythara.services.NotificationDecisionEngine,
     private val vault: com.mythara.secret.observe.vault.LearningVault,
     private val embedder: com.mythara.secret.observe.embed.LocalEmbedder,
     private val memorySyncScheduler: com.mythara.memory.MemorySyncScheduler,
@@ -90,24 +91,27 @@ class ChatViewModel @Inject constructor(
                         .collect { r ->
                             if (r.ongoing) return@collect
                             if (r.packageName == selfPkg) return@collect
-                            // ALWAYS write to long-term memory first —
-                            // even if we drop the spoken-summary step
-                            // because Lumi is mid-reply, the user's
-                            // memory of "Mom messaged me earlier today"
-                            // should still be recoverable from the
-                            // vault and the GitHub backup.
+
+                            // SMART DECISION FIRST. If the auto-
+                            // action store has learned to dismiss
+                            // this package (≥3 manual dismisses with
+                            // ≥70% dismiss-rate), cancel the notif
+                            // and skip the agent loop entirely. The
+                            // dismissal is logged so list_dismissed_
+                            // notifications can surface it later
+                            // ("you also missed a Slack ping").
+                            val decision = runCatching {
+                                notifDecisionEngine.decide(r)
+                            }.getOrDefault(com.mythara.services.NotificationDecisionEngine.Decision.Announce)
+                            if (decision == com.mythara.services.NotificationDecisionEngine.Decision.AutoDismiss) {
+                                runCatching { notifDecisionEngine.applyDismiss(r) }
+                                return@collect
+                            }
+
+                            // ANNOUNCE path — write to vault for
+                            // long-term recall + fire agent loop.
                             persistNotificationToVault(r)
-                            // Nudge MemorySyncScheduler to push within
-                            // ~an hour. No-op when sync isn't
-                            // configured or a recent sync already ran.
                             runCatching { memorySyncScheduler.fireNowIfStale() }
-                            // Drop the *agent-loop* dispatch if we're
-                            // mid-conversation; the user will hear the
-                            // next notification when Lumi is idle. The
-                            // buffer is dropped here intentionally — we
-                            // don't queue, because stacking up
-                            // summaries while the user is talking would
-                            // make the device feel possessed.
                             val u = _ui.value
                             if (u.thinking || u.speaking) return@collect
                             val formatted = formatNotificationForAgent(r) ?: return@collect

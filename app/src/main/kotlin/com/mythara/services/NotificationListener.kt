@@ -4,6 +4,11 @@ import android.app.Notification
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
+import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -11,6 +16,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentLinkedDeque
 
 /**
@@ -34,7 +40,15 @@ import java.util.concurrent.ConcurrentLinkedDeque
  *     content hidden on lockscreen) are honoured — we don't try to
  *     work around system policy.
  */
+@AndroidEntryPoint
 class NotificationListener : NotificationListenerService() {
+
+    @Inject lateinit var actionStore: NotificationActionStore
+
+    // Scope for fire-and-forget DataStore writes when notifications
+    // are cancelled / clicked. Tied to the service instance so it
+    // doesn't outlive the bind; cancelled in onListenerDisconnected.
+    private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     data class Recent(
         val key: String,
@@ -75,6 +89,39 @@ class NotificationListener : NotificationListenerService() {
     override fun onNotificationRemoved(sbn: StatusBarNotification?) {
         if (sbn == null) return
         recent.removeIf { it.key == sbn.key }
+    }
+
+    /**
+     * Reason-aware variant Android invokes when available. Lets us
+     * distinguish "user dismissed" (REASON_CANCEL) from "user
+     * clicked" (REASON_CLICK) from "app cancelled" (REASON_APP_CANCEL).
+     * The action store builds its auto-dismiss decision from these
+     * counts; bumping the wrong counter trains it wrong.
+     */
+    override fun onNotificationRemoved(
+        sbn: StatusBarNotification?,
+        rankingMap: android.service.notification.NotificationListenerService.RankingMap?,
+        reason: Int,
+    ) {
+        super.onNotificationRemoved(sbn, rankingMap, reason)
+        if (sbn == null) return
+        recent.removeIf { it.key == sbn.key }
+        val pkg = sbn.packageName ?: return
+        // Only count user-driven actions; app-side cancels, system
+        // overlay updates, etc. don't tell us anything about user
+        // preference for that pkg.
+        ioScope.launch {
+            runCatching {
+                when (reason) {
+                    REASON_CANCEL -> actionStore.bumpUserDismissed(pkg)
+                    REASON_CLICK -> actionStore.bumpUserOpened(pkg)
+                    // REASON_LISTENER_CANCEL is OUR cancel (we
+                    // initiated it from auto-dismiss path); already
+                    // tracked via bumpAutoDismissed at the call site.
+                    else -> { /* APP_CANCEL, USER_STOPPED, etc. — no signal */ }
+                }
+            }.onFailure { Log.w(TAG, "actionStore bump failed: ${it.message}") }
+        }
     }
 
     private fun captureLocked(sbn: StatusBarNotification) {
