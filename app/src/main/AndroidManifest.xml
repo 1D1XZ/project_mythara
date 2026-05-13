@@ -25,6 +25,12 @@
     <uses-permission android:name="android.permission.READ_CONTACTS" />
     <uses-permission android:name="android.permission.READ_CALENDAR" />
     <uses-permission android:name="android.permission.WRITE_CALENDAR" />
+    <!-- SMS read access for the one-time message-history import that
+         builds the user's persona from their texting patterns. Play
+         Store heavily restricts this for non-default SMS apps; we're
+         sideload-only so the user just grants at runtime when they
+         hit the Import button in Settings. -->
+    <uses-permission android:name="android.permission.READ_SMS" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
