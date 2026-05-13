@@ -178,22 +178,25 @@ class AutoReplyDispatcher @Inject constructor(
     }
 
     private suspend fun fireFavoriteReply(fav: FavoritesStore.Favorite, body: String, pkg: String) {
-        Log.d(TAG, "auto-reply firing: ${fav.name} via $pkg (tone=${fav.tone.label})")
-        audit.logSystem("auto-reply trigger: ${fav.name} on $pkg tone=${fav.tone.label}")
+        val hasImage = looksLikeImageNotification(body)
+        Log.d(TAG, "auto-reply firing: ${fav.name} via $pkg (tone=${fav.tone.label}, image=$hasImage)")
+        audit.logSystem("auto-reply trigger: ${fav.name} on $pkg tone=${fav.tone.label} image=$hasImage")
         val turnText = buildString {
             append(AUTO_REPLY_PREFIX).append(' ')
             append("contact=").append(escape(fav.name)).append(' ')
             append("phone=").append(escape(fav.digits)).append(' ')
             append("app=").append(escape(pkg)).append(' ')
-            append("tone=").append(fav.tone.label).append('\n')
+            append("tone=").append(fav.tone.label).append(' ')
+            append("has_image=").append(if (hasImage) "true" else "false").append('\n')
             append("incoming: ").append(body)
         }
         runner.submit(text = turnText, fromVoice = false)
     }
 
     private suspend fun fireTriage(senderTitle: String, body: String, pkg: String) {
-        Log.d(TAG, "triage firing: sender=$senderTitle via $pkg")
-        audit.logSystem("auto-triage trigger: $senderTitle on $pkg")
+        val hasImage = looksLikeImageNotification(body)
+        Log.d(TAG, "triage firing: sender=$senderTitle via $pkg (image=$hasImage)")
+        audit.logSystem("auto-triage trigger: $senderTitle on $pkg image=$hasImage")
         // No phone in the header — for non-favorites we don't have
         // the digits, and the model is allowed to call read_contact
         // to resolve them when composing a reply (if it decides to
@@ -201,10 +204,46 @@ class AutoReplyDispatcher @Inject constructor(
         val turnText = buildString {
             append(AUTO_TRIAGE_PREFIX).append(' ')
             append("sender=").append(escape(senderTitle)).append(' ')
-            append("app=").append(escape(pkg)).append('\n')
+            append("app=").append(escape(pkg)).append(' ')
+            append("has_image=").append(if (hasImage) "true" else "false").append('\n')
             append("incoming: ").append(body)
         }
         runner.submit(text = turnText, fromVoice = false)
+    }
+
+    /**
+     * Pre-detect "this notification is an image message" from the
+     * body text alone — what WhatsApp / iMessage / etc. surface when
+     * the user receives a photo. Patterns:
+     *   - "📷 Photo" / "📸 …" / "🖼️ …" — emoji prefixes
+     *   - short body equal to "Photo", "Image", "Picture"
+     *   - empty body (notification body is dropped when content is
+     *     just media; the title carries the sender, body is blank)
+     * The dispatcher already passes these turns through (we allow
+     * blank body when imagePaths is non-empty), but the model
+     * doesn't reliably infer "there's an image" from the trimmed
+     * body alone — flagging it explicitly removes the guesswork.
+     */
+    private fun looksLikeImageNotification(body: String): Boolean {
+        if (body.isEmpty()) return true
+        val trimmed = body.trim()
+        // Emoji glyph prefix
+        if (trimmed.startsWith("📷") || trimmed.startsWith("📸") ||
+            trimmed.startsWith("🖼") || trimmed.startsWith("🎞") ||
+            trimmed.startsWith("📹") /* video — covered separately but
+                                       safe to flag */
+        ) return true
+        // Short body, single-word equal to a media noun
+        if (trimmed.length <= 12) {
+            val lower = trimmed.lowercase()
+            if (lower == "photo" || lower == "image" || lower == "picture" ||
+                lower == "sticker" || lower == "gif"
+            ) return true
+            if (lower.endsWith("photo") || lower.endsWith("image") ||
+                lower.endsWith("picture")
+            ) return true
+        }
+        return false
     }
 
     // ── Heuristics ──────────────────────────────────────────────────────

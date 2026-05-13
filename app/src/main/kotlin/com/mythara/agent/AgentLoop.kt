@@ -274,10 +274,17 @@ class AgentLoop @Inject constructor(
                         "Use send_sms_direct with to=${parsed.phone.ifBlank { "<resolve via read_contact>" }}."
                     else -> "Pick the matching direct-send tool for app=${parsed.app}; if none fits, fall back to send_whatsapp_direct."
                 }
+                val imageMandate = if (parsed.hasImage) {
+                    "\n\n⚠️ THIS NOTIFICATION CONTAINS AN IMAGE. The dispatcher detected an image-shaped notification body (likely '📷 Photo', '🖼️ Image', or blank with media attached). " +
+                        "BEFORE you call any send tool, you MUST call read_recent_chat_image with app_hint=\"whatsapp\" (or matching messenger) and max_age_seconds=180 to actually see what the photo is. " +
+                        "DO NOT compose or send a reply until you have a vision description of the image. This is not optional. " +
+                        "Skipping this step means your reply will be a generic 'photo received' acknowledgement — exactly the failure the user explicitly reported. " +
+                        "If read_recent_chat_image returns 'no_image_found', try max_age_seconds=600. If still none, only THEN may you compose a response noting the image hadn't downloaded yet."
+                } else ""
                 ChatMessage(
                     role = "system",
                     content =
-                        "AUTO-REPLY MODE — you are composing a reply to ${parsed.contact} for the user, on the user's behalf, without asking the user first. They've trusted you with this contact.\n\n" +
+                        "AUTO-REPLY MODE — you are composing a reply to ${parsed.contact} for the user, on the user's behalf, without asking the user first. They've trusted you with this contact." + imageMandate + "\n\n" +
                             "Tone: ${tone.label}. ${tone.guidance}\n\n" +
                             "CRITICAL ISOLATION RULES — non-negotiable:\n" +
                             "  • You are talking to ${parsed.contact} and ONLY ${parsed.contact}.\n" +
@@ -330,10 +337,14 @@ class AgentLoop @Inject constructor(
                         "Use send_sms_direct after read_contact to resolve the number."
                     else -> "Pick the matching direct-send tool for ${parsed.app}; resolve the recipient via read_contact first."
                 }
+                val triageImageMandate = if (parsed.hasImage) {
+                    "\n\n⚠️ THIS NOTIFICATION CONTAINS AN IMAGE. Before any decision (NOSURFACE or reply), call read_recent_chat_image with app_hint=\"whatsapp\" + max_age_seconds=180 so you actually see the photo. " +
+                        "If it's a meme / forwarded ad / promotional graphic, that's strong NOSURFACE signal. If it's a genuine personal moment, the reply must reference it specifically. Either way you need to SEE the image first."
+                } else ""
                 ChatMessage(
                     role = "system",
                     content =
-                        "AUTO-TRIAGE MODE — a message arrived from someone NOT in the user's favorites. You decide whether it deserves a reply. The default answer is NO; only reply on real conversational messages from real people.\n\n" +
+                        "AUTO-TRIAGE MODE — a message arrived from someone NOT in the user's favorites. You decide whether it deserves a reply. The default answer is NO; only reply on real conversational messages from real people." + triageImageMandate + "\n\n" +
                             "OUTPUT NOSURFACE (single token, no tools, no text after it) when ANY of these apply:\n" +
                             "  • Marketing / promotional / advertisement (\"50% off!\", \"new arrivals\", \"limited offer\")\n" +
                             "  • One-time codes / OTPs / verification codes (\"your code is 123456\", \"verify your account\")\n" +
@@ -879,6 +890,7 @@ class AgentLoop @Inject constructor(
         val phone: String,
         val app: String,
         val tone: String,
+        val hasImage: Boolean = false,
     )
 
     /**
@@ -891,6 +903,7 @@ class AgentLoop @Inject constructor(
     private data class AutoTriageHeader(
         val sender: String,
         val app: String,
+        val hasImage: Boolean = false,
     )
 
     private fun parseAutoTriageHeader(userText: String): AutoTriageHeader? {
@@ -904,7 +917,8 @@ class AgentLoop @Inject constructor(
         }.toMap()
         val sender = tokens["sender"]?.takeIf { it.isNotBlank() } ?: return null
         val app = tokens["app"].orEmpty()
-        return AutoTriageHeader(sender = sender, app = app)
+        val hasImage = tokens["has_image"].equals("true", ignoreCase = true)
+        return AutoTriageHeader(sender = sender, app = app, hasImage = hasImage)
     }
 
     private fun parseAutoReplyHeader(userText: String): AutoReplyHeader? {
@@ -920,7 +934,8 @@ class AgentLoop @Inject constructor(
         val phone = tokens["phone"].orEmpty()
         val app = tokens["app"].orEmpty()
         val tone = tokens["tone"].orEmpty()
-        return AutoReplyHeader(contact = contact, phone = phone, app = app, tone = tone)
+        val hasImage = tokens["has_image"].equals("true", ignoreCase = true)
+        return AutoReplyHeader(contact = contact, phone = phone, app = app, tone = tone, hasImage = hasImage)
     }
 
     private fun encodeToolCalls(calls: List<ToolCall>): String =
