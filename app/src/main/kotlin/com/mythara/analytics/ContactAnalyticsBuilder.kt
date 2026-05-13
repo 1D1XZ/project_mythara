@@ -162,8 +162,17 @@ class ContactAnalyticsBuilder @Inject constructor(
                     rows.size >= (existing.bigFiveSampleSize * REINFER_GROW_RATIO).toInt())
 
             val infer = if (needsInference && rows.size >= ContactProfileRow.MIN_BIG_FIVE_SAMPLE && gemma.isReady()) {
+                Log.d(TAG, "inference for $displayName: rows=${rows.size} gemmaReady=${gemma.isReady()} → running")
                 runCatching { runGemmaInference(displayName, rows) }.getOrNull()
-            } else null
+            } else {
+                Log.d(
+                    TAG,
+                    "inference for $displayName SKIPPED — needsInference=$needsInference " +
+                        "rows=${rows.size} (need ≥${ContactProfileRow.MIN_BIG_FIVE_SAMPLE}) " +
+                        "gemmaReady=${gemma.isReady()}",
+                )
+                null
+            }
 
             val row = ContactProfileRow(
                 nameKey = nameKey,
@@ -426,9 +435,17 @@ class ContactAnalyticsBuilder @Inject constructor(
         // model's response by querying gemma.summarise (which returns
         // the LLM's literal output, not a parsed structure).
         val raw = runCatching { gemma.summarise(prompt, maxLen = BIG_FIVE_MAX_LEN) }.getOrNull()
-            ?: return null
-        val obj = extractFirstJsonObject(raw) ?: return null
-        return runCatching {
+        if (raw.isNullOrBlank()) {
+            Log.w(TAG, "big-five for $displayName: gemma.summarise returned ${if (raw == null) "null" else "blank"}")
+            return null
+        }
+        Log.d(TAG, "big-five for $displayName: raw gemma output (first 240 chars): ${raw.take(240)}")
+        val obj = extractFirstJsonObject(raw)
+        if (obj == null) {
+            Log.w(TAG, "big-five for $displayName: no {} object found in gemma output — model returned prose, not JSON")
+            return null
+        }
+        val parsed = runCatching {
             val root = json.parseToJsonElement(obj) as? JsonObject ?: return null
             BigFiveOut(
                 openness = (root["openness"] as? JsonPrimitive)?.content?.toDoubleOrNull()?.coerceIn(0.0, 1.0),
@@ -441,7 +458,14 @@ class ContactAnalyticsBuilder @Inject constructor(
                     ?.take(MAX_NOTABLE_TRAITS)
                     ?: emptyList(),
             )
-        }.getOrNull()
+        }.getOrElse { e ->
+            Log.w(TAG, "big-five for $displayName: JSON parse threw: ${e.message}", e)
+            null
+        }
+        if (parsed != null && parsed.openness == null && parsed.conscientiousness == null) {
+            Log.w(TAG, "big-five for $displayName: parsed but all scores null — JSON keys probably mismatched")
+        }
+        return parsed
     }
 
     private fun extractFirstJsonObject(text: String): String? {
