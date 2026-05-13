@@ -180,6 +180,9 @@ fun SettingsScreen(
         }
 
         Spacer(Modifier.height(16.dp))
+        RecallPanel()
+
+        Spacer(Modifier.height(16.dp))
         MemorySyncPanel()
 
         Spacer(Modifier.height(16.dp))

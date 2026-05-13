@@ -1,10 +1,20 @@
 package com.mythara.agent
 
+import android.content.Context
 import android.util.Log
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.preferencesDataStore
 import com.mythara.memory.Tier
 import com.mythara.secret.observe.embed.LocalEmbedder
 import com.mythara.secret.observe.vault.LearningEntity
 import com.mythara.secret.observe.vault.LearningVault
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.exp
@@ -36,9 +46,30 @@ import kotlin.math.exp
  */
 @Singleton
 class SemanticRecall @Inject constructor(
+    @ApplicationContext private val ctx: Context,
     private val embedder: LocalEmbedder,
     private val vault: LearningVault,
 ) {
+
+    private val Context.ds: DataStore<Preferences>
+        by preferencesDataStore("mythara_semantic_recall")
+    private val keyEnabled = booleanPreferencesKey("recall.enabled")
+
+    /**
+     * User preference: should locally-stored facts AND mood trend be
+     * sent to MiniMax as system-prompt context on every chat turn?
+     * Defaults to **true** (the original M8.3 behaviour). Off means
+     * chat is "pure" — only the messages the user typed/spoke leave
+     * the device, nothing from the Observe vault rides along.
+     */
+    fun enabledFlow(): Flow<Boolean> = ctx.ds.data.map { it[keyEnabled] ?: true }
+
+    suspend fun setEnabled(value: Boolean) {
+        ctx.ds.edit { it[keyEnabled] = value }
+    }
+
+    private suspend fun isEnabled(): Boolean =
+        ctx.ds.data.first()[keyEnabled] ?: true
 
     data class RecalledFact(
         val content: String,
@@ -59,6 +90,10 @@ class SemanticRecall @Inject constructor(
         topK: Int = TOP_K,
         threshold: Float = MIN_COSINE,
     ): List<RecalledFact> {
+        if (!isEnabled()) {
+            Log.d(TAG, "recall disabled by user preference")
+            return emptyList()
+        }
         if (query.isBlank()) return emptyList()
         if (!embedder.isReady()) {
             Log.d(TAG, "embedder not ready; skipping recall")
@@ -131,6 +166,7 @@ class SemanticRecall @Inject constructor(
      * indirectly hits the Room DAO).
      */
     suspend fun recentMoodTrend(windowMs: Long = 6 * 3600 * 1000L): String? {
+        if (!isEnabled()) return null
         val cutoff = System.currentTimeMillis() - windowMs
         val recent = vault.listByTier(Tier.Semantic, limit = MOOD_SCAN_LIMIT)
             .filter { it.tsMillis >= cutoff }
