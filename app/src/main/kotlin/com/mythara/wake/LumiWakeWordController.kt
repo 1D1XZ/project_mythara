@@ -116,10 +116,17 @@ class LumiWakeWordController @Inject constructor(
                 detectionCooldownMs = 2_000L,
                 scope = newScope,
             )
-            newEngine.start()
-            scope = newScope
-            engine = newEngine
-            collectJob = newScope.launch {
+
+            // CRITICAL: subscribe to detections BEFORE calling
+            // engine.start(). Re-MENTIA's `_detections` is a
+            // `MutableSharedFlow<>()` with replay=0 + extraBufferCapacity=0
+            // — events emitted while no subscriber is attached are
+            // dropped silently. Using Dispatchers.Main.immediate means
+            // the body executes synchronously up to first suspension, so
+            // by the time `launch` returns, `collect` has registered the
+            // subscriber. Then we start the engine.
+            collectJob = newScope.launch(Dispatchers.Main.immediate) {
+                Log.d(TAG, "detections collector attached")
                 newEngine.detections.collect { d: WakeWordDetection ->
                     val now = System.currentTimeMillis()
                     Log.d(TAG, "wake fired: trigger='$TRIGGER_PHRASE' agent='$AGENT_NAME' score=${d.score}")
@@ -133,7 +140,12 @@ class LumiWakeWordController @Inject constructor(
                     )
                 }
             }
+
+            newEngine.start()
+            scope = newScope
+            engine = newEngine
             _state.value = State.Listening
+            Log.d(TAG, "engine started (audio loop live, subscriber attached)")
         }.onFailure { e ->
             Log.e(TAG, "wake start failed: ${e.message}", e)
             _state.value = State.Error(e.message ?: e.javaClass.simpleName)
