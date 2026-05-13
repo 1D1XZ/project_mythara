@@ -64,6 +64,7 @@ class MemorySync @Inject constructor(
     private val contactProfiles: com.mythara.analytics.ContactProfileRepository,
     private val favorites: com.mythara.data.FavoritesStore,
     private val userAliases: com.mythara.data.UserAliasesStore,
+    private val auditRepo: com.mythara.audit.AuditRepository,
 ) {
     data class Report(
         val ok: Boolean,
@@ -330,6 +331,29 @@ class MemorySync @Inject constructor(
                 client, cfg, "analytics/user_aliases.json", aliasBody, manifest,
                 "mythara: user aliases (${aliases.size})", written, skipped,
             )
+
+            // analytics/audit_log.jsonl — every tool call / redirect /
+            // user-cancel / system event. Each row carries the device
+            // id stamped at write-time, so a multi-device repo lets
+            // each device see ALL devices' actions (rendered in the
+            // panel with a dev:xxxxxx tag on foreign entries).
+            //
+            // Cross-device dedup via (tsMillis + toolName + deviceId
+            // + argsPreview) on restore — same write from the same
+            // device at the same millisecond can't conflict, two
+            // different devices firing the same tool at the same
+            // ms produce distinct rows.
+            val auditEntries = runCatching { auditRepo.dao.listRecent(limit = 5_000) }
+                .getOrDefault(emptyList())
+            if (auditEntries.isNotEmpty()) {
+                val body = auditEntries.joinToString("\n") { entry ->
+                    json.encodeToString(AuditExport.serializer(), entry.toExport(deviceId))
+                }
+                putWithCache(
+                    client, cfg, "analytics/audit_log.jsonl", body, manifest,
+                    "mythara: audit log (${auditEntries.size})", written, skipped,
+                )
+            }
         }
 
         // ---- manifest.json (always last; lastSyncTs always changes)
@@ -456,6 +480,11 @@ class MemorySync @Inject constructor(
                                 toolCallsJson = row.toolCallsJson,
                                 toolCallId = row.toolCallId,
                                 name = row.name,
+                                // Preserve the original authoring
+                                // device id so cross-device chat rows
+                                // render as distinct "from device X"
+                                // cards in the UI.
+                                deviceId = row.dev,
                             ),
                         )
                     }
@@ -516,6 +545,37 @@ class MemorySync @Inject constructor(
                     )
                 }
                 if (incoming.isNotEmpty()) filesRead.add("analytics/favorites.json")
+            }
+        }
+
+        // analytics/audit_log.jsonl — union across devices, deduped
+        // by (tsMillis, toolName, deviceId, argsPreview). Same device
+        // can't write two entries at the same ms; different devices
+        // firing at the same ms produce distinct rows.
+        runCatching {
+            client.readFile(cfg.owner, cfg.repo, "analytics/audit_log.jsonl")
+        }.getOrNull()?.let { r ->
+            if (r is Outcome.Ok) {
+                val incoming = r.value.text.lineSequence()
+                    .filter { it.isNotBlank() }
+                    .mapNotNull {
+                        runCatching { json.decodeFromString(AuditExport.serializer(), it) }.getOrNull()
+                    }
+                    .toList()
+                if (incoming.isNotEmpty()) {
+                    val existing = runCatching { auditRepo.dao.listRecent(limit = 50_000) }
+                        .getOrDefault(emptyList())
+                    val seenKeys = existing.mapTo(HashSet()) {
+                        "${it.tsMillis}|${it.toolName ?: ""}|${it.deviceId ?: ""}|${it.argsPreview ?: ""}"
+                    }
+                    for (exp in incoming) {
+                        val key = "${exp.tsMillis}|${exp.toolName ?: ""}|${exp.deviceId ?: ""}|${exp.argsPreview ?: ""}"
+                        if (seenKeys.add(key)) {
+                            runCatching { auditRepo.dao.insert(exp.toRow()) }
+                        }
+                    }
+                    filesRead.add("analytics/audit_log.jsonl")
+                }
             }
         }
 
@@ -884,6 +944,20 @@ class MemorySync @Inject constructor(
     )
 
     @Serializable
+    data class AuditExport(
+        val tsMillis: Long,
+        val kind: String,
+        val toolName: String? = null,
+        val argsPreview: String? = null,
+        val resultOk: Boolean = true,
+        val resultPreview: String? = null,
+        val latencyMs: Long = 0L,
+        val note: String? = null,
+        val contactName: String? = null,
+        val deviceId: String? = null,
+    )
+
+    @Serializable
     data class ChatRowExport(
         val t: Long,
         val role: String,
@@ -1003,6 +1077,37 @@ class MemorySync @Inject constructor(
         """.trimIndent()
     }
 }
+
+/** Audit Room row → sync-wire shape. Device id falls back to
+ *  the syncing device when the entry was written before deviceId
+ *  was added (legacy rows). */
+private fun com.mythara.audit.AuditEntry.toExport(syncDeviceId: String): MemorySync.AuditExport =
+    MemorySync.AuditExport(
+        tsMillis = tsMillis,
+        kind = kind,
+        toolName = toolName,
+        argsPreview = argsPreview,
+        resultOk = resultOk,
+        resultPreview = resultPreview,
+        latencyMs = latencyMs,
+        note = note,
+        contactName = contactName,
+        deviceId = deviceId ?: syncDeviceId,
+    )
+
+private fun MemorySync.AuditExport.toRow(): com.mythara.audit.AuditEntry =
+    com.mythara.audit.AuditEntry(
+        tsMillis = tsMillis,
+        kind = kind,
+        toolName = toolName,
+        argsPreview = argsPreview,
+        resultOk = resultOk,
+        resultPreview = resultPreview,
+        latencyMs = latencyMs,
+        note = note,
+        contactName = contactName,
+        deviceId = deviceId,
+    )
 
 /** Reverse converter: wire-shape back to the Room row for restore. */
 private fun MemorySync.ContactProfileExport.toRow(): com.mythara.analytics.ContactProfileRow =

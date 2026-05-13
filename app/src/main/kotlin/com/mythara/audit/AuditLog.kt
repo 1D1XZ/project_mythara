@@ -54,6 +54,11 @@ data class AuditEntry(
     @ColumnInfo(name = "latency_ms") val latencyMs: Long = 0L,
     /** Free-form note for non-tool entries (e.g. "subagent spawned: research"). */
     val note: String? = null,
+    /** Stable per-install id of the device that fired this action.
+     *  Stamped on every insert via DeviceIdStore; preserved on
+     *  cross-device sync restore so the audit panel can render
+     *  "device X" tags on each row. */
+    @ColumnInfo(name = "device_id") val deviceId: String? = null,
     /**
      * Resolved contact display name when this entry targets a phone
      * number (send_sms_direct / place_call_direct / send_whatsapp_direct).
@@ -85,7 +90,7 @@ interface AuditDao {
     suspend fun pruneBefore(cutoffMillis: Long): Int
 }
 
-@Database(entities = [AuditEntry::class], version = 2, exportSchema = false)
+@Database(entities = [AuditEntry::class], version = 3, exportSchema = false)
 abstract class AuditDb : RoomDatabase() {
     abstract fun entries(): AuditDao
 }
@@ -115,7 +120,20 @@ class AuditRepository @Inject constructor(@ApplicationContext ctx: Context) {
 class AuditLogger @Inject constructor(
     private val repo: AuditRepository,
     private val contactLookup: ContactLookup,
+    private val deviceIdStore: com.mythara.memory.DeviceIdStore,
 ) {
+
+    /** Cached device id — fetched once on first log call, reused
+     *  thereafter. DeviceIdStore is a singleton that returns the
+     *  same UUID for the install's lifetime. */
+    @Volatile private var cachedDeviceId: String? = null
+
+    private suspend fun deviceId(): String {
+        cachedDeviceId?.let { return it }
+        val id = runCatching { deviceIdStore.id() }.getOrElse { "unknown" }
+        cachedDeviceId = id
+        return id
+    }
 
     suspend fun logToolCall(
         toolName: String,
@@ -137,6 +155,7 @@ class AuditLogger @Inject constructor(
                 } else null
             } else null
 
+            val dev = deviceId()
             withContext(Dispatchers.IO) {
                 repo.dao.insert(
                     AuditEntry(
@@ -148,6 +167,7 @@ class AuditLogger @Inject constructor(
                         resultPreview = preview(output),
                         latencyMs = latencyMs,
                         contactName = resolvedName,
+                        deviceId = dev,
                     ),
                 )
             }
@@ -168,6 +188,7 @@ class AuditLogger @Inject constructor(
 
     suspend fun logRedirect(fromName: String, toName: String) {
         runCatching {
+            val dev = deviceId()
             withContext(Dispatchers.IO) {
                 repo.dao.insert(
                     AuditEntry(
@@ -179,6 +200,7 @@ class AuditLogger @Inject constructor(
                         resultPreview = null,
                         latencyMs = 0L,
                         note = "model called deprecated name; auto-redirected",
+                        deviceId = dev,
                     ),
                 )
             }
@@ -187,6 +209,7 @@ class AuditLogger @Inject constructor(
 
     suspend fun logUserCanceled(toolName: String) {
         runCatching {
+            val dev = deviceId()
             withContext(Dispatchers.IO) {
                 repo.dao.insert(
                     AuditEntry(
@@ -195,6 +218,7 @@ class AuditLogger @Inject constructor(
                         toolName = toolName,
                         resultOk = false,
                         resultPreview = "user declined the confirmation prompt",
+                        deviceId = dev,
                     ),
                 )
             }
@@ -203,6 +227,7 @@ class AuditLogger @Inject constructor(
 
     suspend fun logSystem(note: String) {
         runCatching {
+            val dev = deviceId()
             withContext(Dispatchers.IO) {
                 repo.dao.insert(
                     AuditEntry(
@@ -210,6 +235,7 @@ class AuditLogger @Inject constructor(
                         kind = "system",
                         resultOk = true,
                         note = note,
+                        deviceId = dev,
                     ),
                 )
             }

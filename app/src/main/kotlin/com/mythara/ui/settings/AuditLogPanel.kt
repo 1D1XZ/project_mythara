@@ -38,8 +38,10 @@ import com.mythara.audit.AuditRepository
 import com.mythara.ui.theme.Glyph
 import com.mythara.ui.theme.MytharaColors
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -51,10 +53,20 @@ import javax.inject.Inject
 class AuditLogViewModel @Inject constructor(
     repo: AuditRepository,
     private val logger: AuditLogger,
+    private val deviceIdStore: com.mythara.memory.DeviceIdStore,
 ) : ViewModel() {
     val entries: StateFlow<List<AuditEntry>> =
         repo.dao.observeRecent(limit = 200)
             .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    private val _localDeviceId = MutableStateFlow<String?>(null)
+    val localDeviceId: StateFlow<String?> = _localDeviceId.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            _localDeviceId.value = runCatching { deviceIdStore.id() }.getOrNull()
+        }
+    }
 
     fun clear() {
         viewModelScope.launch { logger.clear() }
@@ -74,6 +86,7 @@ class AuditLogViewModel @Inject constructor(
 @Composable
 fun AuditLogPanel(vm: AuditLogViewModel = hiltViewModel()) {
     val entries by vm.entries.collectAsState()
+    val localDeviceId by vm.localDeviceId.collectAsState()
     var confirmClear by remember { mutableStateOf(false) }
 
     Column(
@@ -123,7 +136,7 @@ fun AuditLogPanel(vm: AuditLogViewModel = hiltViewModel()) {
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 items(entries, key = { it.id }) { e ->
-                    AuditRow(e)
+                    AuditRow(e, localDeviceId = localDeviceId)
                 }
             }
         }
@@ -182,7 +195,7 @@ fun AuditLogPanel(vm: AuditLogViewModel = hiltViewModel()) {
 }
 
 @Composable
-private fun AuditRow(e: AuditEntry) {
+private fun AuditRow(e: AuditEntry, localDeviceId: String?) {
     val statusGlyph = when {
         e.kind == "tool_redirect" -> Glyph.Refresh
         e.kind == "user_canceled" -> Glyph.Cross
@@ -233,9 +246,18 @@ private fun AuditRow(e: AuditEntry) {
                     )
                 }
             }
+            // Device tag — only shown when this entry was authored on
+            // ANOTHER device (cross-device sync). For local entries,
+            // the device id is redundant noise. "dev:abc123" with the
+            // short hash suffix is enough to scan-distinguish.
+            val deviceTag = e.deviceId
+                ?.takeIf { it.isNotBlank() && it != localDeviceId }
+                ?.let { "dev:${it.takeLast(6)}" }
             Text(
-                text = formatTs(e.tsMillis) + if (e.latencyMs > 0) "  ·  ${e.latencyMs}ms" else "",
-                color = MytharaColors.FgDim,
+                text = (deviceTag?.let { "$it  ·  " } ?: "") +
+                    formatTs(e.tsMillis) +
+                    if (e.latencyMs > 0) "  ·  ${e.latencyMs}ms" else "",
+                color = if (deviceTag != null) MytharaColors.Bok else MytharaColors.FgDim,
                 style = MaterialTheme.typography.bodySmall,
             )
         }

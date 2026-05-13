@@ -442,6 +442,7 @@ private fun Transcript(
                 is ChatViewModel.ChatItem.AssistantText -> TextBubble(role = "mythara", text = item.text, isUser = false)
                 is ChatViewModel.ChatItem.Thought -> ThoughtBubble(item)
                 is ChatViewModel.ChatItem.Tool -> ToolCallBubble(item)
+                is ChatViewModel.ChatItem.FromOtherDevice -> FromOtherDeviceCard(item)
             }
         }
         if (streamingActive) {

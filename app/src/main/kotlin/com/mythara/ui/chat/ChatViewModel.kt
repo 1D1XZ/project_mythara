@@ -45,7 +45,11 @@ class ChatViewModel @Inject constructor(
     val confirmationGate: com.mythara.agent.ConfirmationGate,
     private val allowlist: com.mythara.data.AllowlistStore,
     @dagger.hilt.android.qualifiers.ApplicationContext private val appCtx: android.content.Context,
+    private val deviceIdStore: com.mythara.memory.DeviceIdStore,
 ) : ViewModel() {
+    /** Local device id, cached once on init. Used to identify
+     *  foreign-device chat rows for the FromOtherDevice card render. */
+    @Volatile private var cachedLocalDeviceId: String? = null
     // `_ui` is declared up top so any init block can safely call
     // `_ui.update { ... }` — Kotlin runs property initialisers + init
     // blocks in source order, and Tts.speaking is a StateFlow that
@@ -57,6 +61,14 @@ class ChatViewModel @Inject constructor(
 
     init {
         tts.init()
+        // Cache the local device id once at view-model init so
+        // rebuildItems can compare per-row deviceId synchronously.
+        viewModelScope.launch {
+            cachedLocalDeviceId = runCatching { deviceIdStore.id() }.getOrNull()
+            // Re-render after the id resolves so any rows already
+            // observed during init get re-bucketed correctly.
+            rebuildItems(history.dao.listAll())
+        }
         // "Hey Lumi <query>" → submit the query just like a typed
         // message, but flag it as voice-originated so the agent loop
         // injects the "be brief, no markdown" system prompt.
@@ -235,6 +247,21 @@ class ChatViewModel @Inject constructor(
         val key: String
         data class UserText(override val key: String, val text: String) : ChatItem
         data class AssistantText(override val key: String, val text: String, val streaming: Boolean = false) : ChatItem
+        /**
+         * A chat message that originated on a DIFFERENT device and
+         * landed locally via memory-sync restore. Rendered as a
+         * distinct card (similar shape to tool-call cards) with the
+         * authoring device's short id and the role so the user sees
+         * "you said X on dev:abc123" rather than mixing it inline as
+         * if it happened on this device.
+         */
+        data class FromOtherDevice(
+            override val key: String,
+            val role: String,                 // user | assistant
+            val text: String,
+            val deviceShortId: String,        // last 6 chars of the device UUID
+            val tsMillis: Long,
+        ) : ChatItem
         /** Reasoning trace extracted from `<think>…</think>` in the model's response. */
         data class Thought(
             override val key: String,
@@ -391,7 +418,31 @@ class ChatViewModel @Inject constructor(
 
     private fun rebuildItems(rows: List<MessageRow>) {
         val items = mutableListOf<ChatItem>()
+        val localDev = cachedLocalDeviceId
         for (row in rows) {
+            // Foreign-device rows (origin device id differs from this
+            // install's id) render as a distinct card, not inline. The
+            // user / assistant role is preserved on the card itself so
+            // the reader sees BOTH "this came from elsewhere" AND
+            // "what was said".
+            val rowDev = row.deviceId?.takeIf { it.isNotBlank() }
+            if (rowDev != null && localDev != null && rowDev != localDev) {
+                if (row.role == "user" || row.role == "assistant") {
+                    items.add(
+                        ChatItem.FromOtherDevice(
+                            key = "x:${row.id}",
+                            role = row.role,
+                            text = row.content.orEmpty(),
+                            deviceShortId = rowDev.takeLast(6),
+                            tsMillis = row.tsMillis,
+                        ),
+                    )
+                    continue
+                }
+                // tool / system rows from other devices are skipped —
+                // out of context (tool args reference local IDs).
+                if (row.role == "tool") continue
+            }
             when (row.role) {
                 "user" -> items.add(ChatItem.UserText(key = "u:${row.id}", text = row.content.orEmpty()))
                 "assistant" -> {

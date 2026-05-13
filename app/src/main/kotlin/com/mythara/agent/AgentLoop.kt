@@ -46,7 +46,19 @@ class AgentLoop @Inject constructor(
     private val recall: SemanticRecall,
     private val userNameStore: com.mythara.data.UserNameStore,
     private val contactProfiles: com.mythara.analytics.ContactProfileRepository,
+    private val deviceIdStore: com.mythara.memory.DeviceIdStore,
 ) {
+
+    /** Cached on first read — DeviceIdStore is a stable per-install
+     *  UUID, no need to fetch every insert. */
+    @Volatile private var cachedDeviceId: String? = null
+
+    private suspend fun deviceId(): String {
+        cachedDeviceId?.let { return it }
+        val id = runCatching { deviceIdStore.id() }.getOrElse { "" }
+        cachedDeviceId = id
+        return id
+    }
 
     sealed interface Turn {
         /** Streamed text fragment to append to the active assistant bubble. */
@@ -89,8 +101,14 @@ class AgentLoop @Inject constructor(
             emit(Turn.MissingApiKey); return@flow
         }
 
+        val localDev = deviceId()
         history.dao.insert(
-            MessageRow(tsMillis = System.currentTimeMillis(), role = "user", content = userText),
+            MessageRow(
+                tsMillis = System.currentTimeMillis(),
+                role = "user",
+                content = userText,
+                deviceId = localDev.takeIf { it.isNotBlank() },
+            ),
         )
 
         // One-shot semantic recall over the user's latest message. The
@@ -543,6 +561,7 @@ class AgentLoop @Inject constructor(
                     role = "assistant",
                     content = lastAssistantText.takeIf { it.isNotEmpty() },
                     toolCallsJson = if (toolCalls.isNotEmpty()) encodeToolCalls(toolCalls) else null,
+                    deviceId = localDev.takeIf { it.isNotBlank() },
                 ),
             )
 
@@ -594,6 +613,7 @@ class AgentLoop @Inject constructor(
                         content = result.output,
                         toolCallId = call.id,
                         name = call.function.name,
+                        deviceId = localDev.takeIf { it.isNotBlank() },
                     ),
                 )
                 emit(Turn.ToolEnd(call.id, call.function.name, result.ok, result.output, dt))

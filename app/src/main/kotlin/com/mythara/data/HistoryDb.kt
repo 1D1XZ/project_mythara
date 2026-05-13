@@ -34,6 +34,14 @@ data class MessageRow(
     @ColumnInfo(name = "tool_calls_json") val toolCallsJson: String? = null,
     @ColumnInfo(name = "tool_call_id") val toolCallId: String? = null,
     val name: String? = null,
+    /**
+     * Stable per-install id of the device that authored this message.
+     * Null for rows from the pre-deviceId schema (legacy local entries).
+     * Set on every local insert; preserved verbatim on cross-device
+     * memory-sync restore so ChatViewModel can render foreign-device
+     * messages as their own card.
+     */
+    @ColumnInfo(name = "device_id") val deviceId: String? = null,
 )
 
 @Dao
@@ -57,13 +65,25 @@ interface MessageDao {
     suspend fun count(): Int
 }
 
-@Database(entities = [MessageRow::class], version = 1, exportSchema = false)
+@Database(entities = [MessageRow::class], version = 2, exportSchema = false)
 abstract class HistoryDb : RoomDatabase() {
     abstract fun messages(): MessageDao
 }
 
+/**
+ * v1 → v2 just adds the nullable device_id column. Non-destructive
+ * so existing chat history survives the schema bump.
+ */
+private val MIGRATION_HISTORY_1_2 = object : androidx.room.migration.Migration(1, 2) {
+    override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE messages ADD COLUMN device_id TEXT")
+    }
+}
+
 @Singleton
 class HistoryRepository @Inject constructor(@ApplicationContext ctx: Context) {
-    private val db: HistoryDb = Room.databaseBuilder(ctx, HistoryDb::class.java, "mythara_history.db").build()
+    private val db: HistoryDb = Room.databaseBuilder(ctx, HistoryDb::class.java, "mythara_history.db")
+        .addMigrations(MIGRATION_HISTORY_1_2)
+        .build()
     val dao: MessageDao = db.messages()
 }
