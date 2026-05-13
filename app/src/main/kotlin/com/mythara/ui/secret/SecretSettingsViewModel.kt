@@ -13,6 +13,8 @@ import com.mythara.secret.observe.ObserveSession
 import com.mythara.secret.observe.ObserveState
 import com.mythara.secret.observe.ObserveStore
 import com.mythara.secret.observe.embed.EmbeddingsModelStore
+import com.mythara.secret.observe.extract.gemma.GemmaExtractor
+import com.mythara.secret.observe.extract.gemma.GemmaModelStore
 import com.mythara.secret.observe.vault.LearningEntity
 import com.mythara.secret.observe.vault.LearningVault
 import com.mythara.secret.observe.vosk.Language
@@ -38,6 +40,8 @@ class SecretSettingsViewModel @Inject constructor(
     private val store: ObserveStore,
     private val voskModel: VoskModelStore,
     private val embedModel: EmbeddingsModelStore,
+    private val gemmaModel: GemmaModelStore,
+    private val gemmaExtractor: GemmaExtractor,
     private val session: ObserveSession,
     private val secretAuth: SecretAuthStore,
     private val vault: LearningVault,
@@ -52,6 +56,7 @@ class SecretSettingsViewModel @Inject constructor(
         val confirmingForget: Boolean = false,
         val modelState: VoskModelStore.State = VoskModelStore.State.Missing,
         val embedModelState: EmbeddingsModelStore.State = EmbeddingsModelStore.State.Missing,
+        val gemmaModelState: GemmaModelStore.State = GemmaModelStore.State.Missing,
         val transcriptCount: Int = 0,
         val recentTranscripts: List<TranscriptPreview> = emptyList(),
         /** True when the user has opted into biometric unlock for Secret mode. */
@@ -96,6 +101,11 @@ class SecretSettingsViewModel @Inject constructor(
         viewModelScope.launch {
             embedModel.state.collect { ems ->
                 _state.update { it.copy(embedModelState = ems) }
+            }
+        }
+        viewModelScope.launch {
+            gemmaModel.state.collect { gms ->
+                _state.update { it.copy(gemmaModelState = gms) }
             }
         }
         viewModelScope.launch {
@@ -167,6 +177,17 @@ class SecretSettingsViewModel @Inject constructor(
 
     fun ensureEmbedModel() {
         viewModelScope.launch { embedModel.ensureReady() }
+    }
+
+    fun ensureGemmaModel() {
+        viewModelScope.launch { gemmaModel.ensureReady() }
+    }
+
+    fun forgetGemmaModel() {
+        viewModelScope.launch {
+            gemmaExtractor.release()
+            gemmaModel.forgetModel()
+        }
     }
 
     fun forgetVoskModel() {
@@ -258,6 +279,8 @@ class SecretSettingsViewModel @Inject constructor(
         viewModelScope.launch {
             voskModel.forgetModel()
             embedModel.forgetModel()
+            gemmaExtractor.release()
+            gemmaModel.forgetModel()
             vault.clear()
             refreshTranscripts()
         }

@@ -146,6 +146,11 @@ dependencies {
     // Universal Sentence Encoder Lite. Lazy-downloaded ~6MB tflite model.
     implementation(libs.mediapipe.tasks.text)
 
+    // MediaPipe LLM Inference — on-device Gemma for M8.2.1 fact extraction.
+    // Adds ~30MB of native runtime to the APK; the model itself (~530MB)
+    // is lazy-downloaded into filesDir.
+    implementation(libs.mediapipe.tasks.genai)
+
     // M5+ deps deferred until their milestones land:
     //   CameraX (take_photo), SQLCipher (Observe vault), Argon2 (Secret pw)
 }
