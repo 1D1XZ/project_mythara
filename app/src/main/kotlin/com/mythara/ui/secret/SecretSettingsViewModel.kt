@@ -15,6 +15,7 @@ import com.mythara.secret.observe.ObserveStore
 import com.mythara.secret.observe.embed.EmbeddingsModelStore
 import com.mythara.secret.observe.vault.LearningEntity
 import com.mythara.secret.observe.vault.LearningVault
+import com.mythara.secret.observe.vosk.Language
 import com.mythara.secret.observe.vosk.VoskModelStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -57,6 +58,8 @@ class SecretSettingsViewModel @Inject constructor(
         val biometricUnlock: Boolean = false,
         val vaultCount: Int = 0,
         val recentLearnings: List<VaultPreview> = emptyList(),
+        val activeLanguage: Language = Language.Default,
+        val languageAvailability: Map<String, Boolean> = emptyMap(),
     ) {
         val readyToStart: Boolean
             get() = micGranted && (!notifRequired || notifGranted) && modelState is VoskModelStore.State.Ready
@@ -106,6 +109,16 @@ class SecretSettingsViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
+            voskModel.activeLanguageFlow().collect { lang ->
+                _state.update { it.copy(activeLanguage = lang) }
+            }
+        }
+        viewModelScope.launch {
+            voskModel.availability.collect { map ->
+                _state.update { it.copy(languageAvailability = map) }
+            }
+        }
+        viewModelScope.launch {
             vault.observeRecent(MAX_PREVIEW).collect { rows ->
                 val previews = rows.map { row ->
                     VaultPreview(
@@ -134,6 +147,22 @@ class SecretSettingsViewModel @Inject constructor(
 
     fun ensureModel() {
         viewModelScope.launch { voskModel.ensureReady() }
+    }
+
+    fun ensureModelFor(lang: Language) {
+        viewModelScope.launch { voskModel.ensureReadyFor(lang) }
+    }
+
+    fun setActiveLanguage(lang: Language) {
+        viewModelScope.launch {
+            voskModel.setActiveLanguage(lang)
+            // Auto-fetch the new active if it isn't on disk yet.
+            if (!voskModel.isExtractedFor(lang)) voskModel.ensureReadyFor(lang)
+        }
+    }
+
+    fun forgetLanguage(lang: Language) {
+        viewModelScope.launch { voskModel.forgetLanguage(lang) }
     }
 
     fun ensureEmbedModel() {

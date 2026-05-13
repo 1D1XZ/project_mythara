@@ -2,12 +2,21 @@ package com.mythara.secret.observe.vosk
 
 import android.content.Context
 import android.util.Log
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -19,37 +28,52 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Manages Mythara's local copy of the Vosk small-English speech model.
- * The model isn't bundled in the APK (it's 40MB+); first time the user
- * enables Observe we fetch it from alphacephei.com over HTTPS, stream
- * to a temp zip, and extract into a stable known path.
+ * Manages Mythara's local copies of Vosk speech models, one per
+ * [Language]. At any moment one language is **active** — that's the
+ * one [VoskAsr] loads into memory and ObserveSession transcribes
+ * with. Other languages may be downloaded too (idle on disk, ready
+ * to switch into) but only one Model object exists in RAM at a time.
  *
- * On-device path:
- *   filesDir/vosk-models/en-us-small/{am,conf,graph,ivector,README}
+ * On-disk layout (after migration from M8.1b's single-language path):
  *
- * Idempotent — call ensureReady() any number of times; if files are
- * already in place, the method short-circuits to Ready.
+ *   filesDir/vosk-models/
+ *     ├── en-US/  ← extracted Alpha Cephei model
+ *     ├── es/
+ *     ├── fr/
+ *     └── …
  *
- * Observable state is exposed via [state] so the UI can render a
- * progress bar during the download. Transitions:
- *   Missing → Downloading(bytes/total) → Extracting → Ready
- *   any → Failed(message)
+ *   cacheDir/
+ *     ├── vosk-model-small-en-us-0.15.zip       (during download)
+ *     └── vosk-model-small-en-us-0.15.zip.size  (Content-Length marker;
+ *           cached zip only honoured when its byte length matches.)
+ *
+ * The active language is persisted in a per-store DataStore. Migrate
+ * runs on construction to move M8.1b's `en-us-small` directory to the
+ * new `en-US` location so existing users don't re-download.
  */
 @Singleton
 class VoskModelStore @Inject constructor(@ApplicationContext private val ctx: Context) {
 
     sealed interface State {
         data object Missing : State
-        data class Downloading(val bytes: Long, val total: Long) : State {
+        data class Downloading(val lang: Language, val bytes: Long, val total: Long) : State {
             val pct: Int get() = if (total > 0) ((bytes * 100) / total).toInt() else 0
         }
-        data object Extracting : State
-        data class Ready(val path: String) : State
-        data class Failed(val message: String) : State
+        data class Extracting(val lang: Language) : State
+        data class Ready(val lang: Language, val path: String) : State
+        data class Failed(val lang: Language, val message: String) : State
     }
 
-    private val _state = MutableStateFlow<State>(if (isExtracted()) State.Ready(modelDir.absolutePath) else State.Missing)
-    val state: StateFlow<State> = _state.asStateFlow()
+    private val Context.dataStore: DataStore<Preferences> by preferencesDataStore("mythara_observe_settings")
+    private val keyActiveLang = stringPreferencesKey("active.language.code")
+
+    private val _activeState = MutableStateFlow<State>(State.Missing)
+    val activeState: StateFlow<State> = _activeState.asStateFlow()
+
+    /** Per-language availability map (true = extracted to disk). Updated whenever
+     *  any path-touching operation completes — UI observes for picker glyphs. */
+    private val _availability = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+    val availability: StateFlow<Map<String, Boolean>> = _availability.asStateFlow()
 
     private val http: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
@@ -57,77 +81,149 @@ class VoskModelStore @Inject constructor(@ApplicationContext private val ctx: Co
         .build()
 
     val modelsRoot: File get() = ctx.filesDir.resolve("vosk-models")
-    val modelDir: File get() = modelsRoot.resolve("en-us-small")
-    private val zipTmp: File get() = ctx.cacheDir.resolve("vosk-model-small-en-us-0.15.zip")
-    /**
-     * Sidecar marker recording the Content-Length of a *fully* downloaded
-     * zip. We trust the cached zip only when its byte length matches the
-     * marker — defeats the "20MB-cap" hack that previously let truncated
-     * downloads pass the sanity floor and crash the extractor.
-     */
-    private val zipSizeMarker: File get() = ctx.cacheDir.resolve("vosk-model-small-en-us-0.15.zip.size")
 
-    fun isReady(): Boolean = _state.value is State.Ready
-    fun isExtracted(): Boolean = modelDir.resolve("am").exists() && modelDir.resolve("conf").exists()
-    fun pathOrNull(): String? = if (isExtracted()) modelDir.absolutePath else null
+    init {
+        migrateLegacyPath()
+        refreshAvailability()
+        // Snapshot the active state synchronously so callers asking
+        // immediately after Hilt construction (e.g., VoskAsr.isReady)
+        // get a non-Missing answer when the model is already on disk.
+        val active = runBlocking { activeLanguage() }
+        _activeState.value = if (isExtractedFor(active)) {
+            State.Ready(active, modelDirFor(active).absolutePath)
+        } else State.Missing
+    }
 
-    suspend fun ensureReady(): State {
-        if (isExtracted()) {
-            _state.value = State.Ready(modelDir.absolutePath)
-            return _state.value
+    fun modelDirFor(lang: Language): File = modelsRoot.resolve(lang.code)
+    private fun zipTmpFor(lang: Language): File =
+        ctx.cacheDir.resolve("${lang.modelName}.zip")
+    private fun zipMarkerFor(lang: Language): File =
+        ctx.cacheDir.resolve("${lang.modelName}.zip.size")
+
+    fun activeLanguageFlow(): Flow<Language> = ctx.dataStore.data.map { p ->
+        Language.fromCode(p[keyActiveLang])
+    }
+
+    suspend fun activeLanguage(): Language =
+        Language.fromCode(ctx.dataStore.data.first()[keyActiveLang])
+
+    suspend fun setActiveLanguage(lang: Language) {
+        ctx.dataStore.edit { it[keyActiveLang] = lang.code }
+        // Reflect new active in activeState immediately based on disk.
+        _activeState.value = if (isExtractedFor(lang)) {
+            State.Ready(lang, modelDirFor(lang).absolutePath)
+        } else State.Missing
+    }
+
+    fun isExtractedFor(lang: Language): Boolean {
+        val dir = modelDirFor(lang)
+        return dir.resolve("am").exists() && dir.resolve("conf").exists()
+    }
+
+    fun pathOrNullFor(lang: Language): String? =
+        if (isExtractedFor(lang)) modelDirFor(lang).absolutePath else null
+
+    fun isActiveReady(): Boolean = runBlocking { isExtractedFor(activeLanguage()) }
+
+    /** Path of the currently-active language's extracted model, or null. */
+    fun activePathOrNull(): String? = runBlocking { pathOrNullFor(activeLanguage()) }
+
+    suspend fun ensureReadyFor(lang: Language): State = withContext(Dispatchers.IO) {
+        if (isExtractedFor(lang)) {
+            return@withContext State.Ready(lang, modelDirFor(lang).absolutePath).also {
+                if (lang == activeLanguage()) _activeState.value = it
+            }
         }
-        return withContext(Dispatchers.IO) {
-            runCatching {
-                download()
-                extract()
-                cleanupZip()
-                State.Ready(modelDir.absolutePath).also { _state.value = it }
-            }.getOrElse { e ->
-                Log.e(TAG, "model fetch failed: ${e.message}", e)
-                // Self-heal: a truncated zip or a corrupt extract leaves
-                // turds in cache that would be re-used on retry. Wipe
-                // them so the next ensureReady() does a fresh fetch.
-                runCatching { if (zipTmp.exists()) zipTmp.delete() }
-                runCatching { if (zipSizeMarker.exists()) zipSizeMarker.delete() }
-                runCatching { if (modelDir.exists()) modelDir.deleteRecursively() }
-                State.Failed(e.message ?: e.javaClass.simpleName).also { _state.value = it }
+        runCatching {
+            download(lang)
+            extract(lang)
+            cleanupZip(lang)
+            refreshAvailability()
+            State.Ready(lang, modelDirFor(lang).absolutePath).also {
+                if (lang == activeLanguage()) _activeState.value = it
+            }
+        }.getOrElse { e ->
+            Log.e(TAG, "fetch failed for ${lang.code}: ${e.message}", e)
+            runCatching { if (zipTmpFor(lang).exists()) zipTmpFor(lang).delete() }
+            runCatching { if (zipMarkerFor(lang).exists()) zipMarkerFor(lang).delete() }
+            runCatching { if (modelDirFor(lang).exists()) modelDirFor(lang).deleteRecursively() }
+            refreshAvailability()
+            State.Failed(lang, e.message ?: e.javaClass.simpleName).also {
+                if (lang == activeLanguage()) _activeState.value = it
             }
         }
     }
 
-    fun forgetModel() {
-        runCatching {
-            if (modelDir.exists()) modelDir.deleteRecursively()
-            if (zipTmp.exists()) zipTmp.delete()
-            if (zipSizeMarker.exists()) zipSizeMarker.delete()
+    suspend fun ensureReady(): State = ensureReadyFor(activeLanguage())
+
+    fun forgetLanguage(lang: Language) {
+        runCatching { if (modelDirFor(lang).exists()) modelDirFor(lang).deleteRecursively() }
+        runCatching { if (zipTmpFor(lang).exists()) zipTmpFor(lang).delete() }
+        runCatching { if (zipMarkerFor(lang).exists()) zipMarkerFor(lang).delete() }
+        refreshAvailability()
+        runBlocking {
+            if (lang == activeLanguage()) _activeState.value = State.Missing
         }
-        _state.value = State.Missing
     }
 
-    private fun isCachedZipComplete(): Boolean {
-        if (!zipTmp.exists()) return false
-        if (!zipSizeMarker.exists()) return false
-        val expected = zipSizeMarker.readText().trim().toLongOrNull() ?: return false
+    fun forgetAll() {
+        Language.entries.forEach { forgetLanguage(it) }
+    }
+
+    // Legacy convenience for callers still in the M8.1b world.
+    fun isExtracted(): Boolean = isActiveReady()
+    fun pathOrNull(): String? = activePathOrNull()
+    fun forgetModel() = runBlocking { forgetLanguage(activeLanguage()) }
+
+    /** Compatibility alias — old API surface from M8.1b. */
+    val state: StateFlow<State> get() = activeState
+
+    // ---------------------------------------------------------------- internals
+
+    private fun migrateLegacyPath() {
+        val legacy = modelsRoot.resolve("en-us-small")
+        val target = modelsRoot.resolve(Language.EnglishUS.code)
+        if (legacy.exists() && !target.exists()) {
+            runCatching {
+                modelsRoot.mkdirs()
+                if (legacy.renameTo(target)) {
+                    Log.d(TAG, "migrated legacy en-us-small → ${target.absolutePath}")
+                }
+            }
+        }
+    }
+
+    private fun refreshAvailability() {
+        val map = Language.entries.associate { it.code to isExtractedFor(it) }
+        _availability.value = map
+    }
+
+    private fun isCachedZipComplete(lang: Language): Boolean {
+        val zipTmp = zipTmpFor(lang)
+        val marker = zipMarkerFor(lang)
+        if (!zipTmp.exists() || !marker.exists()) return false
+        val expected = marker.readText().trim().toLongOrNull() ?: return false
         return expected >= MIN_VALID_BYTES && zipTmp.length() == expected
     }
 
-    private fun download() {
-        if (isCachedZipComplete()) {
-            Log.d(TAG, "cached zip is complete (${zipTmp.length()}b); skipping download")
+    private fun download(lang: Language) {
+        val zipTmp = zipTmpFor(lang)
+        val marker = zipMarkerFor(lang)
+        if (isCachedZipComplete(lang)) {
+            Log.d(TAG, "cached zip complete for ${lang.code}; skipping download")
             return
         }
         modelsRoot.mkdirs()
         ctx.cacheDir.mkdirs()
-        // Wipe any partial leftover before starting fresh.
         if (zipTmp.exists()) zipTmp.delete()
-        if (zipSizeMarker.exists()) zipSizeMarker.delete()
+        if (marker.exists()) marker.delete()
 
-        val req = Request.Builder().url(MODEL_URL).build()
+        val req = Request.Builder().url(lang.modelUrl).build()
         http.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) error("HTTP ${resp.code} while fetching Vosk model")
-            val body = resp.body ?: error("empty body fetching Vosk model")
+            if (!resp.isSuccessful) error("HTTP ${resp.code} fetching ${lang.code} model")
+            val body = resp.body ?: error("empty body fetching ${lang.code} model")
             val total = body.contentLength().coerceAtLeast(0L)
-            _state.value = State.Downloading(0, total)
+            _activeState.value = State.Downloading(lang, 0, total)
             body.byteStream().use { input ->
                 FileOutputStream(zipTmp).use { out ->
                     val buf = ByteArray(64 * 1024)
@@ -141,69 +237,62 @@ class VoskModelStore @Inject constructor(@ApplicationContext private val ctx: Co
                         val now = System.currentTimeMillis()
                         if (now - lastReportMs > PROGRESS_REPORT_MS) {
                             lastReportMs = now
-                            _state.update { State.Downloading(read, total) }
+                            _activeState.update { State.Downloading(lang, read, total) }
                         }
                     }
                 }
             }
-            val downloadedBytes = zipTmp.length()
-            Log.d(TAG, "downloaded $downloadedBytes bytes (expected $total)")
-            if (total > 0 && downloadedBytes != total) {
+            val downloaded = zipTmp.length()
+            if (total > 0 && downloaded != total) {
                 runCatching { zipTmp.delete() }
-                error("download truncated: got $downloadedBytes, expected $total")
+                error("download truncated: got $downloaded, expected $total")
             }
-            if (downloadedBytes < MIN_VALID_BYTES) {
+            if (downloaded < MIN_VALID_BYTES) {
                 runCatching { zipTmp.delete() }
-                error("download too small ($downloadedBytes bytes) — server probably returned an error page")
+                error("download too small ($downloaded bytes) — server probably returned an error page")
             }
-            // Mark the cached zip as complete so retries don't redownload.
-            zipSizeMarker.writeText(downloadedBytes.toString())
+            marker.writeText(downloaded.toString())
+            Log.d(TAG, "downloaded ${lang.code}: $downloaded bytes")
         }
     }
 
-    private fun extract() {
-        _state.value = State.Extracting
+    private fun extract(lang: Language) {
+        _activeState.value = State.Extracting(lang)
+        val modelDir = modelDirFor(lang)
         if (modelDir.exists()) modelDir.deleteRecursively()
         modelDir.mkdirs()
 
+        val zipTmp = zipTmpFor(lang)
         ZipInputStream(zipTmp.inputStream().buffered()).use { zin ->
-            // The zip contains a top-level folder like "vosk-model-small-en-us-0.15/".
-            // We want to strip that prefix so files land under modelDir/ directly.
             while (true) {
                 val entry = zin.nextEntry ?: break
                 val name = entry.name
                 val stripped = name.substringAfter('/', missingDelimiterValue = name)
-                if (stripped.isBlank()) {
-                    zin.closeEntry(); continue
-                }
+                if (stripped.isBlank()) { zin.closeEntry(); continue }
                 val out = modelDir.resolve(stripped)
-                if (entry.isDirectory) {
-                    out.mkdirs()
-                } else {
+                if (entry.isDirectory) out.mkdirs()
+                else {
                     out.parentFile?.mkdirs()
                     out.outputStream().use { fos -> zin.copyTo(fos) }
                 }
                 zin.closeEntry()
             }
         }
-        Log.d(TAG, "extracted model to ${modelDir.absolutePath}")
+        Log.d(TAG, "extracted ${lang.code} → ${modelDir.absolutePath}")
     }
 
-    private fun cleanupZip() {
-        if (zipTmp.exists()) zipTmp.delete()
-        if (zipSizeMarker.exists()) zipSizeMarker.delete()
+    private fun cleanupZip(lang: Language) {
+        runCatching { if (zipTmpFor(lang).exists()) zipTmpFor(lang).delete() }
+        runCatching { if (zipMarkerFor(lang).exists()) zipMarkerFor(lang).delete() }
     }
 
     companion object {
         private const val TAG = "Mythara/Vosk"
-        // Official small English model. Generated by Alpha Cephei, released
-        // under Apache 2.0. Pinned to a specific version so unexpected
-        // schema changes don't break us.
-        private const val MODEL_URL = "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip"
-        // The actual file is ~40MB. Sanity floor catches HTML-error pages
-        // and any other obviously-too-small response. The real correctness
-        // check is the Content-Length match recorded in [zipSizeMarker].
-        private const val MIN_VALID_BYTES = 30L * 1024 * 1024
+        // Floor at 8MB catches HTML error pages without rejecting the
+        // smaller language models (Portuguese 31MB, Vietnamese 32MB,
+        // Turkish 35MB). The real correctness check is Content-Length
+        // matching the recorded marker.
+        private const val MIN_VALID_BYTES = 8L * 1024 * 1024
         private const val PROGRESS_REPORT_MS = 250L
     }
 }

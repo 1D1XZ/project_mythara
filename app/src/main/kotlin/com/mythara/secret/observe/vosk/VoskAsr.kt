@@ -22,19 +22,31 @@ import javax.inject.Singleton
 class VoskAsr @Inject constructor(private val store: VoskModelStore) {
 
     @Volatile private var model: Model? = null
+    @Volatile private var loadedPath: String? = null
 
-    /** Loads the model from disk if not already loaded. Throws if not extracted. */
+    /**
+     * Loads the model for the **currently-active language**. If the active
+     * language has changed since the last load (user picked a different
+     * one in Secret Settings → languages), this swaps the resident model
+     * — closes the old one (~150MB RAM) and loads the new one.
+     */
     @Synchronized
     private fun ensureModel(): Model {
-        model?.let { return it }
-        val path = store.pathOrNull() ?: error("Vosk model not on disk — call VoskModelStore.ensureReady() first")
-        Log.d(TAG, "loading Vosk model from $path")
-        val m = Model(path)
+        val activePath = store.activePathOrNull()
+            ?: error("Vosk model for the active language is not on disk — call VoskModelStore.ensureReady() first")
+        val current = model
+        if (current != null && loadedPath == activePath) return current
+
+        // Active language changed (or first call) — swap.
+        runCatching { current?.close() }
+        Log.d(TAG, "loading Vosk model from $activePath")
+        val m = Model(activePath)
         model = m
+        loadedPath = activePath
         return m
     }
 
-    fun isReady(): Boolean = store.isExtracted()
+    fun isReady(): Boolean = store.isActiveReady()
 
     /** Fresh recognizer for one session. Caller must close() when done. */
     fun newRecognizer(sampleRate: Float = 16_000f): Recognizer {
@@ -49,6 +61,7 @@ class VoskAsr @Inject constructor(private val store: VoskModelStore) {
     fun release() {
         model?.close()
         model = null
+        loadedPath = null
     }
 
     companion object {
