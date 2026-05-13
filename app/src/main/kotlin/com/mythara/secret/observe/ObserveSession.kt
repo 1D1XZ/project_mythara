@@ -197,6 +197,29 @@ class ObserveSession @Inject constructor(
         }
     }
 
+    /**
+     * Heuristic gate on whether the captured utterance is "clean
+     * enough" for speaker-vector matching to be reliable. Vosk's
+     * spk-0.4 model produces unstable x-vectors on:
+     *   - very brief utterances (< ~3s of voiced audio)
+     *   - mostly-silent buffers (PitchDetector returns f0=0)
+     *   - very quiet audio (low RMS — usually background hum)
+     *
+     * Field data captured 2026-05-12 showed 0/3 → 1/3 match rate
+     * after the threshold drop, with the two remaining failures
+     * both being degenerate audio: one f0=0 (unvoiced), one
+     * 2.9s/190Hz (too short, anomalous pitch). Gating on these
+     * removes those false-negative log lines and avoids tagging
+     * a transcript as `speaker:unknown` when the real issue was
+     * that the audio wasn't recognisable as speech at all.
+     */
+    private fun isCleanForSpeakerMatch(features: AcousticAnalyzer.Features): Boolean {
+        if (features.durationSec < MIN_SPK_DURATION_SEC) return false
+        if (features.meanF0Hz <= 0f) return false // unvoiced
+        if (features.meanRms < MIN_SPK_RMS) return false
+        return true
+    }
+
     private suspend fun writeTranscript(
         dir: File,
         text: String,
@@ -206,15 +229,26 @@ class ObserveSession @Inject constructor(
         val now = System.currentTimeMillis()
 
         // Speaker ID: if Vosk emitted an x-vector for this utterance AND
-        // we have any enrolled speakers, find the best match. The
-        // resulting facet (when present) gets attached to every record
-        // we create from this transcript — the working-tier transcript
-        // itself, all explicit-note records, and all Gemma/heuristic
-        // semantic extractions. That way memory recall queries like
-        // "what did Sarah say about her trip" can filter by speaker.
-        val matched = if (spkVec != null) {
+        // the acoustic gate passes (utterance long enough + voiced +
+        // not too quiet), match it against enrolled speakers. The gate
+        // suppresses noisy comparisons on degenerate audio (silence,
+        // very brief utterances) where Vosk's spk-0.4 x-vector is too
+        // unstable for cosine matching to be trustworthy. Matched
+        // facet propagates to every record derived from this
+        // transcript so memory recall queries can filter by speaker.
+        val gateClean = isCleanForSpeakerMatch(acoustic)
+        val matched = if (spkVec != null && gateClean) {
             runCatching { speakerVault.matchBest(spkVec) }.getOrNull()
         } else null
+        if (spkVec != null && !gateClean) {
+            Log.d(
+                TAG,
+                "speaker match skipped — audio too short/quiet/unvoiced " +
+                    "(dur=${"%.1f".format(acoustic.durationSec)}s " +
+                    "f0=${"%.0f".format(acoustic.meanF0Hz)}Hz " +
+                    "rms=${"%.3f".format(acoustic.meanRms)})",
+            )
+        }
         val speakerFacet = matched?.let { "speaker:${it.speaker.name}" }
         if (matched != null) {
             speakerVault.recordMatch(matched.speaker.id, now)
@@ -391,6 +425,20 @@ class ObserveSession @Inject constructor(
          *  Beyond this the utterance is still transcribed; only the
          *  acoustic features are computed from the first 30 seconds. */
         private const val MAX_UTTERANCE_SAMPLES = 480_000
+
+        /** Below this duration, Vosk's speaker x-vector isn't stable
+         *  enough for reliable matching. Tuned empirically — at 2.9s
+         *  with anomalous-pitch audio we saw a 0.13 similarity to the
+         *  enrolled reference (wildly off); at 5.2s with normal audio
+         *  it landed at 0.44 (clean match). 3s feels like the right
+         *  conservative cutoff. */
+        private const val MIN_SPK_DURATION_SEC = 3.0f
+
+        /** Mean RMS below this is essentially noise floor for the
+         *  VOICE_RECOGNITION mic source on a Pixel — typically means
+         *  background hum or a very distant speaker. The x-vector
+         *  computed off such audio drifts. */
+        private const val MIN_SPK_RMS = 0.005f
 
         private val ISO_FMT = SimpleDateFormat("yyyyMMdd'T'HHmmss'_'SSS'Z'", Locale.US).apply {
             timeZone = java.util.TimeZone.getTimeZone("UTC")
