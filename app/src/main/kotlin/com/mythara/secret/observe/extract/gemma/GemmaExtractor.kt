@@ -117,7 +117,10 @@ class GemmaExtractor @Inject constructor(
             // the GPU path on Tensor G3/G4.
             val config = EngineConfig(
                 modelPath = path,
-                backend = Backend.CPU,
+                // Backend went from enum value to sealed class in
+                // LiteRT-LM 0.10.x — Backend.CPU(numOfThreads) lets the
+                // SDK pick a sensible thread count when null.
+                backend = Backend.CPU(null),
             )
             Engine(config).also { eng ->
                 eng.initialize()
@@ -133,9 +136,13 @@ class GemmaExtractor @Inject constructor(
      * Flatten a [Message] into the concatenated text of its [Content.Text]
      * parts. Gemma 4 only emits text for extraction prompts, but the API
      * supports mixed image/audio content; we ignore non-text parts.
+     *
+     * LiteRT-LM 0.10.x wrapped Message's content list in a [Contents]
+     * holder — hence `.contents.contents`. The outer access is the
+     * holder; the inner is the actual `List<Content>`.
      */
     private fun Message.text(): String =
-        contents.filterIsInstance<Content.Text>().joinToString("") { it.text }
+        contents.contents.filterIsInstance<Content.Text>().joinToString("") { it.text }
 
     private fun buildPrompt(transcript: String): String {
         // LiteRT-LM's Conversation applies the model's chat template

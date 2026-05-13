@@ -49,6 +49,7 @@ class SecretSettingsViewModel @Inject constructor(
     private val session: ObserveSession,
     private val secretAuth: SecretAuthStore,
     private val vault: LearningVault,
+    private val semanticExtractor: com.mythara.secret.observe.extract.SemanticExtractor,
 ) : ViewModel() {
 
     data class State(
@@ -73,9 +74,20 @@ class SecretSettingsViewModel @Inject constructor(
         val recentLearnings: List<VaultPreview> = emptyList(),
         val activeLanguage: Language = Language.Default,
         val languageAvailability: Map<String, Boolean> = emptyMap(),
+        /** Result of the most recent "Try Gemma" tap; null when never tested. */
+        val gemmaProbe: GemmaProbe = GemmaProbe.Idle,
+        val gemmaEnabled: Boolean = false,
     ) {
         val readyToStart: Boolean
             get() = micGranted && (!notifRequired || notifGranted) && modelState is VoskModelStore.State.Ready
+    }
+
+    /** Forensic state of the most recent Gemma init probe. */
+    sealed interface GemmaProbe {
+        data object Idle : GemmaProbe
+        data object Running : GemmaProbe
+        data class Ok(val sampleOutput: String) : GemmaProbe
+        data class Failed(val message: String) : GemmaProbe
     }
 
     data class TranscriptPreview(val tsMs: Long, val text: String)
@@ -137,6 +149,11 @@ class SecretSettingsViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
+            semanticExtractor.gemmaEnabledFlow().collect { enabled ->
+                _state.update { it.copy(gemmaEnabled = enabled) }
+            }
+        }
+        viewModelScope.launch {
             voskModel.activeLanguageFlow().collect { lang ->
                 _state.update { it.copy(activeLanguage = lang) }
             }
@@ -195,6 +212,50 @@ class SecretSettingsViewModel @Inject constructor(
 
     fun ensureSpeakerModel() {
         viewModelScope.launch { speakerModel.ensureReady() }
+    }
+
+    /**
+     * One-shot Gemma init probe. Runs OUTSIDE the Observe audio loop —
+     * this is how we test whether the LiteRT-LM crash we saw on Gemma 4
+     * E2B was due to in-Observe contention or fundamental. On success,
+     * persists `gemmaEnabled = true` so SemanticExtractor stops bypassing
+     * Gemma. On failure, leaves the toggle off and surfaces the error.
+     */
+    fun probeGemma() {
+        viewModelScope.launch {
+            _state.update { it.copy(gemmaProbe = GemmaProbe.Running) }
+            val result = runCatching {
+                // Tiny prompt — we just need to verify init + a single
+                // round-trip. The output doesn't get stored anywhere.
+                gemmaExtractor.extractWithMood(
+                    "The user said: I had a really nice walk in the park this morning, the weather was lovely.",
+                )
+            }
+            result.onSuccess { r ->
+                semanticExtractor.setGemmaEnabled(true)
+                _state.update {
+                    it.copy(
+                        gemmaProbe = GemmaProbe.Ok(
+                            sampleOutput = "facts=${r.facts.size} mood=${r.mood ?: "n/a"}",
+                        ),
+                        gemmaEnabled = true,
+                    )
+                }
+            }.onFailure { e ->
+                _state.update {
+                    it.copy(
+                        gemmaProbe = GemmaProbe.Failed(e.message ?: e.javaClass.simpleName),
+                    )
+                }
+            }
+        }
+    }
+
+    fun setGemmaEnabled(value: Boolean) {
+        viewModelScope.launch {
+            semanticExtractor.setGemmaEnabled(value)
+            _state.update { it.copy(gemmaEnabled = value) }
+        }
     }
 
     fun forgetSpeakerModel() {

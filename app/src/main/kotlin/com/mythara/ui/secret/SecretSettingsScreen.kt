@@ -519,17 +519,63 @@ fun SecretSettingsScreen(
             when (val gs = state.gemmaModelState) {
                 is GemmaModelStore.State.Ready -> {
                     Text(
-                        text = "${Glyph.Check} Gemma 4 E2B ready — facts extracted in English regardless of source language.",
+                        text = "${Glyph.Check} Gemma 4 E2B on disk — extraction stays on heuristic until you probe init successfully.",
                         color = MytharaColors.Julep,
                         style = MaterialTheme.typography.bodyMedium,
                     )
-                    Spacer(Modifier.height(6.dp))
-                    Button(
-                        onClick = { vm.forgetGemmaModel() },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MytharaColors.Surface, contentColor = MytharaColors.Fg,
-                        ),
-                    ) { Text("${Glyph.Cross} clear cache") }
+                    Spacer(Modifier.height(8.dp))
+                    // Init probe status pill
+                    val (probeGlyph, probeColor, probeText) = when (val p = state.gemmaProbe) {
+                        is SecretSettingsViewModel.GemmaProbe.Idle -> Triple(
+                            Glyph.CircleOutline, MytharaColors.FgMute, "not tested yet",
+                        )
+                        is SecretSettingsViewModel.GemmaProbe.Running -> Triple(
+                            Glyph.Ellipsis, MytharaColors.Citron, "running init probe…",
+                        )
+                        is SecretSettingsViewModel.GemmaProbe.Ok -> Triple(
+                            Glyph.Check, MytharaColors.Julep, "init ok · ${p.sampleOutput}",
+                        )
+                        is SecretSettingsViewModel.GemmaProbe.Failed -> Triple(
+                            Glyph.Cross, MytharaColors.Sriracha, "init failed: ${p.message}",
+                        )
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(probeGlyph, color = probeColor, style = MaterialTheme.typography.bodySmall)
+                        Spacer(Modifier.padding(end = 6.dp))
+                        Text(probeText, color = MytharaColors.FgDim, style = MaterialTheme.typography.bodySmall)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    // Mood-enabled status
+                    Text(
+                        text = if (state.gemmaEnabled) "${Glyph.Dot} Gemma extraction ENABLED — mood facets will fire on next Observe transcript"
+                        else "${Glyph.CircleOutline} Gemma extraction is DISABLED — Observe uses heuristic only",
+                        color = if (state.gemmaEnabled) MytharaColors.Bok else MytharaColors.FgMute,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = { vm.probeGemma() },
+                            enabled = state.gemmaProbe !is SecretSettingsViewModel.GemmaProbe.Running,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MytharaColors.Charple, contentColor = MytharaColors.Fg,
+                            ),
+                        ) { Text("${Glyph.Arrow} probe Gemma init") }
+                        if (state.gemmaEnabled) {
+                            Button(
+                                onClick = { vm.setGemmaEnabled(false) },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MytharaColors.Surface, contentColor = MytharaColors.Fg,
+                                ),
+                            ) { Text("${Glyph.Cross} disable") }
+                        }
+                        Button(
+                            onClick = { vm.forgetGemmaModel() },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MytharaColors.Surface, contentColor = MytharaColors.Fg,
+                            ),
+                        ) { Text("${Glyph.Cross} clear cache") }
+                    }
                 }
                 is GemmaModelStore.State.Missing -> {
                     Text(
