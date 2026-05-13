@@ -67,6 +67,7 @@ class ToolRegistry @Inject constructor(
     saveSkillTool: com.mythara.agent.tools.SaveSkillTool,
     runSkillTool: com.mythara.agent.tools.RunSkillTool,
     screenshotViewTool: com.mythara.agent.tools.ScreenshotViewTool,
+    pressBackTool: com.mythara.agent.tools.PressBackTool,
     private val gate: ConfirmationGate,
     private val allowlist: com.mythara.data.AllowlistStore,
     private val confirmationSettings: ConfirmationSettings,
@@ -93,6 +94,7 @@ class ToolRegistry @Inject constructor(
         listDismissedNotificationsTool,
         listSkillsTool, getSkillTool, saveSkillTool, runSkillTool,
         screenshotViewTool,
+        pressBackTool,
     )
     private val byName: Map<String, Tool> = tools.associateBy { it.name }
 
