@@ -60,8 +60,16 @@ class AgentLoop @Inject constructor(
             val durationMs: Long,
         ) : Turn
 
-        /** End of the entire turn (post-loop). */
-        data class Finished(val finalText: String, val iterations: Int) : Turn
+        /**
+         * End of the entire turn (post-loop). Carries the dominant
+         * mood trend the agent observed (if any) so the chat layer
+         * can pass it through to TTS for prosody modulation.
+         */
+        data class Finished(
+            val finalText: String,
+            val iterations: Int,
+            val userMoodTrend: String? = null,
+        ) : Turn
 
         /** Stream-level failure (HTTP / SSE / mapped MiniMax code). */
         data class Error(val message: String, val retryable: Boolean) : Turn
@@ -90,6 +98,19 @@ class AgentLoop @Inject constructor(
             ChatMessage(role = "system", content = rendered)
         }
 
+        // Recent emotional trend across the last 6 hours of semantic
+        // records. Drives a separate system message so MiniMax can
+        // shape its tone (warm + supportive when the user's anxious,
+        // upbeat when excited, default otherwise). Only fires when
+        // Gemma extraction is enabled and ≥50% of recent records
+        // agree on a single mood — too mixed and we say nothing,
+        // which avoids whiplash advice.
+        val moodTrend = recall.recentMoodTrend()
+        val moodSystem: ChatMessage? = recall.renderMoodSystemMessage(moodTrend)?.let { rendered ->
+            android.util.Log.d(TAG, "injecting mood context: $moodTrend")
+            ChatMessage(role = "system", content = rendered)
+        }
+
         val client = MiniMaxClient(apiKey = apiKey, region = snap.region)
         val streaming = StreamingChat(client)
 
@@ -108,11 +129,13 @@ class AgentLoop @Inject constructor(
                     name = row.name,
                 )
             }
-            // Prepend the recall system message (if any) so MiniMax sees
-            // durable memory before persisted chat history.
-            val prior: List<ChatMessage> = if (recallSystem != null) {
-                listOf(recallSystem) + historyMessages
-            } else historyMessages
+            // Prepend system messages (mood context, then recalled
+            // facts) so MiniMax sees both before persisted chat history.
+            val prior: List<ChatMessage> = buildList {
+                if (moodSystem != null) add(moodSystem)
+                if (recallSystem != null) add(recallSystem)
+                addAll(historyMessages)
+            }
 
             val req = ChatRequest(
                 model = snap.model,
@@ -171,7 +194,7 @@ class AgentLoop @Inject constructor(
             // that the next iteration should execute tools + resume.
             val toolFinish = finishReason == "tool_calls" || finishReason == "tool_use"
             if (toolCalls.isEmpty() || !toolFinish) {
-                emit(Turn.Finished(lastAssistantText, iterations = iter))
+                emit(Turn.Finished(lastAssistantText, iterations = iter, userMoodTrend = moodTrend))
                 return@flow
             }
 
@@ -199,7 +222,7 @@ class AgentLoop @Inject constructor(
 
         // Hit the iteration cap. Surface a soft-stop so the user sees a
         // bounded conversation instead of an infinite-loop bill.
-        emit(Turn.Finished(lastAssistantText + " [hit max iterations]", iterations = iter))
+        emit(Turn.Finished(lastAssistantText + " [hit max iterations]", iterations = iter, userMoodTrend = moodTrend))
     }
 
     private fun encodeToolCalls(calls: List<ToolCall>): String =

@@ -112,6 +112,55 @@ class SemanticRecall @Inject constructor(
         return sb.toString().trimEnd()
     }
 
+    /**
+     * Looks at semantic records written in the last [windowMs] and
+     * extracts the dominant `mood:` facet pattern. Returns the
+     * dominant mood label (e.g. "anxious") if one mood accounts for
+     * ≥50% of the window's facets, else null when readings are too
+     * mixed to call. Empty vault or no Gemma-extracted records
+     * yet → also null.
+     *
+     * Cheap — linear scan of recent records. Calls listByTier with a
+     * window cap. Caller is expected to be on a coroutine (this
+     * indirectly hits the Room DAO).
+     */
+    suspend fun recentMoodTrend(windowMs: Long = 6 * 3600 * 1000L): String? {
+        val cutoff = System.currentTimeMillis() - windowMs
+        val recent = vault.listByTier(Tier.Semantic, limit = MOOD_SCAN_LIMIT)
+            .filter { it.tsMillis >= cutoff }
+        if (recent.isEmpty()) return null
+        val moods = recent.mapNotNull { entity ->
+            vault.decodeFacets(entity)
+                .firstOrNull { it.startsWith("mood:") }
+                ?.removePrefix("mood:")
+        }.filter { it != "unknown" && it.isNotBlank() }
+        if (moods.isEmpty()) return null
+        val histogram = moods.groupingBy { it }.eachCount()
+        val total = moods.size
+        val (topMood, topCount) = histogram.maxBy { it.value }
+        return if (topCount.toDouble() / total >= MOOD_DOMINANCE_THRESHOLD) topMood else null
+    }
+
+    /**
+     * Format a mood trend as a one-line system-prompt addendum. The
+     * model is instructed to *respond* with awareness of the user's
+     * state — not to mirror the mood word-for-word, just to let it
+     * shape tone choices.
+     */
+    fun renderMoodSystemMessage(moodTrend: String?): String? {
+        if (moodTrend.isNullOrBlank()) return null
+        val guidance = when (moodTrend) {
+            "anxious", "frustrated", "sad" ->
+                "The user seems $moodTrend in recent conversations. Be warm and supportive; avoid pushing topics that could amplify stress."
+            "excited", "happy" ->
+                "The user has been $moodTrend lately. Feel free to match their energy a bit."
+            "calm", "neutral" ->
+                "The user has been $moodTrend recently. Default conversational tone."
+            else -> "The user's recent emotional state appears: $moodTrend."
+        }
+        return "User emotional context. $guidance"
+    }
+
     companion object {
         private const val TAG = "Mythara/Recall"
 
@@ -123,6 +172,12 @@ class SemanticRecall @Inject constructor(
 
         /** Hard scan cap; bumps to an ANN index when we exceed this. */
         const val SCAN_LIMIT = 500
+
+        /** Cap on records the mood-trend scan walks. */
+        const val MOOD_SCAN_LIMIT = 200
+
+        /** Fraction of the window a single mood must own to count as "dominant". */
+        const val MOOD_DOMINANCE_THRESHOLD = 0.5
 
         /** Reinforcement weight: seen=1 → 1.0×, seen=5 → 1.4×, seen=11 → 2.0×. */
         const val SEEN_WEIGHT = 0.1f

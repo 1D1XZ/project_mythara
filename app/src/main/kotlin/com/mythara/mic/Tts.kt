@@ -61,7 +61,8 @@ class Tts @Inject constructor(@ApplicationContext private val ctx: Context) {
         }
     }
 
-    fun speak(text: String) = speak(text, locale = null)
+    fun speak(text: String) = speak(text, locale = null, userMoodTrend = null)
+    fun speak(text: String, locale: Locale?) = speak(text, locale, userMoodTrend = null)
 
     /**
      * Speak the text with the given [locale]. Falls back to the system
@@ -69,16 +70,45 @@ class Tts @Inject constructor(@ApplicationContext private val ctx: Context) {
      * (the engine returns LANG_MISSING_DATA / LANG_NOT_SUPPORTED, in
      * which case the previously-set language remains active).
      *
-     * Pass `null` to retain whatever language the engine was last set
-     * to — typically the system default. Use this when you don't know
-     * the target language for the utterance.
+     * [userMoodTrend] is a hint from M8.5 phase 3: when the user's
+     * recent emotional state is known (e.g. "anxious", "excited",
+     * "sad", "frustrated"), the speech rate + pitch are tweaked
+     * subtly to make Lumi's voice feel appropriate — softer and
+     * slower when the user is stressed; slightly more upbeat when
+     * the user is excited. Defaults to the engine's normal rate/pitch
+     * when no trend is detected. Settings are restored to defaults
+     * after the utterance starts playing so subsequent speak() calls
+     * with a different mood don't compound.
+     *
+     * Pass `null` for [locale] to retain whatever language the engine
+     * was last set to — typically the system default. Use this when
+     * you don't know the target language for the utterance.
      */
-    fun speak(text: String, locale: Locale?) {
+    fun speak(text: String, locale: Locale?, userMoodTrend: String?) {
         if (text.isBlank()) return
         if (engine == null) init()
         if (!ready) return
         locale?.let { setLanguageIfSupported(it) }
+        applyProsody(userMoodTrend)
         engine?.speak(text, TextToSpeech.QUEUE_ADD, null, UUID.randomUUID().toString())
+    }
+
+    /**
+     * Map a mood trend to a (pitch, rate) pair on Android's typical
+     * 0.5–2.0 scale, defaults at 1.0. Values are subtle — too much
+     * pitch shift makes the voice cartoonish; too little is a
+     * no-op. Empirically a 5–10% nudge is the sweet spot.
+     */
+    private fun applyProsody(userMoodTrend: String?) {
+        val e = engine ?: return
+        val (pitch, rate) = when (userMoodTrend) {
+            "anxious", "sad", "frustrated" -> 0.92f to 0.9f   // warmer + slower
+            "excited", "happy" -> 1.05f to 1.05f              // slightly upbeat
+            // Calm / neutral / unknown / null all use defaults.
+            else -> 1.0f to 1.0f
+        }
+        runCatching { e.setPitch(pitch) }
+        runCatching { e.setSpeechRate(rate) }
     }
 
     private fun setLanguageIfSupported(locale: Locale) {

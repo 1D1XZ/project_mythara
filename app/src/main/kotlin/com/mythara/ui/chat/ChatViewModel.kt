@@ -159,13 +159,17 @@ class ChatViewModel @Inject constructor(
                         //                               the system default if ML Kit
                         //                               returns `und` or the engine
                         //                               doesn't have voice data.
+                        // The userMoodTrend on Turn.Finished (M8.5 phase 3)
+                        // lets Tts modulate pitch + rate: softer + slower for
+                        // anxious/sad/frustrated users, slightly more upbeat
+                        // for excited/happy. Default voice otherwise.
                         val cleaned = Thinks.strip(turn.finalText)
                             .removeSuffix(" [hit max iterations]")
                         val spoken = SpokenText.forSpeech(cleaned)
                         if (spoken.isNotBlank()) {
                             launch {
                                 val locale = languageDetector.identifyLocale(spoken)
-                                tts.speak(spoken, locale)
+                                tts.speak(spoken, locale, turn.userMoodTrend)
                             }
                         }
                     }
