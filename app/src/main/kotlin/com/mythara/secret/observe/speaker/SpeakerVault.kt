@@ -133,8 +133,21 @@ class SpeakerVault @Inject constructor(private val dao: SpeakerDao) {
 
     companion object {
         private const val TAG = "Mythara/SpkVault"
-        /** Cosine threshold above which a match is accepted. */
-        const val MATCH_THRESHOLD = 0.5f
+        /**
+         * Cosine threshold above which a match is accepted. The Vosk
+         * spk-0.4 model produces raw x-vectors without PLDA / LDA
+         * post-processing, so absolute cosine values are lower than
+         * a contrastive embedding model would give. Field testing on
+         * Pixel 9 Pro Fold showed legitimate same-speaker matches
+         * landing in the 0.25-0.45 range; 0.35 is the empirically-
+         * tuned floor that separates self from background voices
+         * without rejecting most genuine matches.
+         *
+         * Re-enroll with more samples (5+, varied positions / volumes)
+         * to push the average reference vector closer to the user's
+         * "typical" voice and raise observed similarities.
+         */
+        const val MATCH_THRESHOLD = 0.35f
 
         fun encode(vec: FloatArray): ByteArray {
             val buf = ByteBuffer.allocate(vec.size * 4).order(ByteOrder.LITTLE_ENDIAN)
