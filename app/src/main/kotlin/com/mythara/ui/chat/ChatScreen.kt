@@ -77,6 +77,7 @@ private const val SILENCE_TIMEOUT_MS = 5_000L
 @Composable
 fun ChatScreen(
     onOpenSettings: () -> Unit = {},
+    onOpenPeople: () -> Unit = {},
     vm: ChatViewModel = hiltViewModel(),
 ) {
     val ui by vm.ui.collectAsState()
@@ -252,6 +253,7 @@ fun ChatScreen(
     ) {
         ChatHeader(
             onOpenSettings = onOpenSettings,
+            onOpenPeople = onOpenPeople,
             thinking = ui.thinking,
             continuousMode = ui.continuousMode,
             onToggleContinuous = { vm.setContinuousMode(!ui.continuousMode) },
@@ -316,6 +318,7 @@ fun ChatScreen(
 @Composable
 private fun ChatHeader(
     onOpenSettings: () -> Unit,
+    onOpenPeople: () -> Unit,
     thinking: Boolean,
     continuousMode: Boolean,
     onToggleContinuous: () -> Unit,
@@ -352,6 +355,24 @@ private fun ChatHeader(
                     style = MaterialTheme.typography.labelMedium.copy(
                         color = if (continuousMode) MytharaColors.Bg else MytharaColors.FgMute,
                     ),
+                )
+            }
+            Spacer(Modifier.size(8.dp))
+            // People / analytics pill — Charple-bordered to draw the
+            // eye since this is the surface the user opens to prep
+            // for a conversation. Sits left of settings so it reads
+            // as the more frequently-used affordance.
+            Box(
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .background(MytharaColors.Surface)
+                    .border(1.dp, MytharaColors.Charple, CircleShape)
+                    .clickable(onClick = onOpenPeople)
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
+            ) {
+                Text(
+                    text = "${Glyph.DiamondFilled} people",
+                    style = MaterialTheme.typography.labelMedium.copy(color = MytharaColors.Charple),
                 )
             }
             Spacer(Modifier.size(8.dp))

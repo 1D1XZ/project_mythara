@@ -75,6 +75,7 @@ class ToolRegistry @Inject constructor(
     private val audit: com.mythara.audit.AuditLogger,
     private val criticalGuard: CriticalActionGuard,
     private val autoReplyPrefix: com.mythara.data.AutoReplyPrefixStore,
+    private val convWriter: ConversationMessageWriter,
 ) {
     private val tools: List<Tool> = listOf(
         timeTool, batteryTool, webFetchTool,
@@ -263,6 +264,24 @@ class ToolRegistry @Inject constructor(
         val result = runCatching { tool.execute(effectiveArgs) }
             .getOrElse { ToolResult.fail(it.message ?: "tool threw ${it.javaClass.simpleName}") }
         val latencyMs = (System.nanoTime() - t0) / 1_000_000
+        // Analytics capture — when an auto-reply turn fires a
+        // phone-send tool successfully, persist the OUTGOING body
+        // into the learning vault facetted with the contact. The
+        // dispatcher already wrote the INCOMING side; this pair
+        // lets ContactAnalyticsBuilder fold both directions of
+        // every conversation into the per-contact profile.
+        if (result.ok && tool.name in PHONE_SEND_TOOLS) {
+            val marker = currentCoroutineContext()[AutoReplyMarker.Key]
+            if (marker != null && marker.contactName.isNotBlank()) {
+                val body = (effectiveArgs["body"] as? JsonPrimitive)?.content.orEmpty()
+                val pkg = when (tool.name) {
+                    "send_whatsapp_direct" -> "com.whatsapp"
+                    "send_sms_direct" -> "sms"
+                    else -> ""
+                }
+                runCatching { convWriter.record(marker.contactName, body, pkg, direction = "outgoing") }
+            }
+        }
         // Audit log records the FINAL args (with prefix applied) so the
         // user sees exactly what landed on the wire, not the LLM's
         // pre-prefix body.

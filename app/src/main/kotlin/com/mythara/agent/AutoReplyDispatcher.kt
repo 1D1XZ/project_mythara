@@ -56,6 +56,7 @@ class AutoReplyDispatcher @Inject constructor(
     private val runner: AgentRunner,
     private val audit: AuditLogger,
     private val imageIngestor: NotificationImageIngestor,
+    private val convWriter: ConversationMessageWriter,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -181,6 +182,12 @@ class AutoReplyDispatcher @Inject constructor(
         val hasImage = looksLikeImageNotification(body)
         Log.d(TAG, "auto-reply firing: ${fav.name} via $pkg (tone=${fav.tone.label}, image=$hasImage)")
         audit.logSystem("auto-reply trigger: ${fav.name} on $pkg tone=${fav.tone.label} image=$hasImage")
+        // Store the incoming message in the vault so the analytics
+        // builder can fold it into the per-contact profile alongside
+        // image learnings + outgoing replies. Same facet shape as
+        // notification-image so SemanticRecall + ContactAnalyticsBuilder
+        // pick it up uniformly.
+        convWriter.record(fav.name, body, pkg, direction = "incoming")
         val turnText = buildString {
             append(AUTO_REPLY_PREFIX).append(' ')
             append("contact=").append(escape(fav.name)).append(' ')
@@ -197,6 +204,10 @@ class AutoReplyDispatcher @Inject constructor(
         val hasImage = looksLikeImageNotification(body)
         Log.d(TAG, "triage firing: sender=$senderTitle via $pkg (image=$hasImage)")
         audit.logSystem("auto-triage trigger: $senderTitle on $pkg image=$hasImage")
+        // Store incoming for analytics. Non-favorites still build up
+        // per-sender data — they appear in the People list below the
+        // favorites and accumulate context the same way.
+        convWriter.record(senderTitle, body, pkg, direction = "incoming")
         // No phone in the header — for non-favorites we don't have
         // the digits, and the model is allowed to call read_contact
         // to resolve them when composing a reply (if it decides to

@@ -544,8 +544,13 @@ class AgentLoop @Inject constructor(
                 // Compose the coroutine context: always carry the user
                 // message; additionally mark auto-reply turns so the
                 // registry knows whether to apply the configured prefix.
+                val contactName = if (isAutoReplyTurn) {
+                    parseAutoReplyHeader(userText)?.contact
+                        ?: parseAutoTriageHeader(userText)?.sender
+                        ?: ""
+                } else ""
                 val toolContext: kotlin.coroutines.CoroutineContext =
-                    if (isAutoReplyTurn) UserMessageContext(userText) + AutoReplyMarker()
+                    if (isAutoReplyTurn) UserMessageContext(userText) + AutoReplyMarker(contactName)
                     else UserMessageContext(userText)
                 val result = kotlinx.coroutines.withContext(toolContext) {
                     registry.execute(call.function.name, call.function.arguments)
@@ -1119,6 +1124,16 @@ class UserMessageContext(val text: String) :
  * messages — only auto-reply turns mark messages as agent-originated;
  * explicit user-driven sends go through verbatim.
  */
-class AutoReplyMarker : AbstractCoroutineContextElement(Key) {
+class AutoReplyMarker(
+    /**
+     * Display name of the contact this auto-reply / triage turn is
+     * addressing. Used by [ToolRegistry] to facet outgoing-message
+     * vault writes so the analytics layer can fold them in alongside
+     * incoming and image learnings. Empty string for triage turns
+     * where we couldn't extract a sender from the notification
+     * title.
+     */
+    val contactName: String = "",
+) : AbstractCoroutineContextElement(Key) {
     companion object Key : CoroutineContext.Key<AutoReplyMarker>
 }

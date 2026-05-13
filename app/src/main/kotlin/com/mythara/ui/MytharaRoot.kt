@@ -97,6 +97,7 @@ fun MytharaRoot(
                         composable(Routes.Chat) {
                             ChatScreen(
                                 onOpenSettings = { nav.navigate(Routes.Settings) },
+                                onOpenPeople = { nav.navigate(Routes.People) },
                             )
                         }
                         composable(Routes.Settings) {
