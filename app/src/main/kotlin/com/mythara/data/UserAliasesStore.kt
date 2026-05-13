@@ -102,6 +102,27 @@ class UserAliasesStore @Inject constructor(
         save(current)
     }
 
+    /**
+     * Atomic batch add. Calling upsert in a loop from the
+     * multi-picker raced — each coroutine read the same stale list
+     * before any save landed, so only the last write survived
+     * (last-writer-wins on an N-entry list = only one alias ever
+     * persisted). This variant reads once, merges everything, writes
+     * once.
+     */
+    suspend fun upsertAll(aliases: List<Alias>) {
+        if (aliases.isEmpty()) return
+        val current = list().toMutableList()
+        for (alias in aliases) {
+            val n = alias.name.trim()
+            if (n.isEmpty()) continue
+            val idx = current.indexOfFirst { it.name.equals(n, ignoreCase = true) }
+            val normalized = alias.copy(name = n)
+            if (idx >= 0) current[idx] = normalized else current.add(normalized)
+        }
+        save(current)
+    }
+
     suspend fun remove(name: String) {
         save(list().filterNot { it.name.equals(name, ignoreCase = true) })
     }

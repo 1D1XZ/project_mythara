@@ -58,6 +58,17 @@ class UserAliasesViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Bulk add from the multi-picker. Atomic write via
+     * [UserAliasesStore.upsertAll] — N separate add() calls race
+     * each other because each coroutine reads the same stale list
+     * before any save lands, so only the last write persists.
+     */
+    fun addAll(aliases: List<UserAliasesStore.Alias>) {
+        if (aliases.isEmpty()) return
+        viewModelScope.launch { store.upsertAll(aliases) }
+    }
+
     fun remove(name: String) {
         viewModelScope.launch { store.remove(name) }
     }
@@ -253,7 +264,11 @@ fun UserAliasesPanel(vm: UserAliasesViewModel = hiltViewModel()) {
             title = "pick the contacts that are YOU",
             onDismiss = { multiPickerOpen = false },
             onApply = { picked ->
-                picked.forEach { vm.add(it.displayName, it.phone) }
+                // Batch via addAll so we don't race ourselves —
+                // see UserAliasesStore.upsertAll comment for why.
+                vm.addAll(
+                    picked.map { UserAliasesStore.Alias(name = it.displayName, phone = it.phone) },
+                )
             },
         )
     }
