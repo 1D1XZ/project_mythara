@@ -183,6 +183,9 @@ fun SettingsScreen(
         MemorySyncPanel()
 
         Spacer(Modifier.height(16.dp))
+        WakeWordPanel()
+
+        Spacer(Modifier.height(16.dp))
         Row(modifier = Modifier.fillMaxWidth()) {
             TextButton(onClick = onOpenAbout) {
                 Text("${Glyph.DiamondOutline} about Mythara  ${Glyph.Arrow}", color = MytharaColors.FgMute)

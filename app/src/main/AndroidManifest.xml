@@ -66,6 +66,17 @@
                 android:value="long-running on-device speech observation for personal AI assistant" />
         </service>
 
+        <!-- Lumi wake-word listener (M8.3a). Foreground service of type
+             `microphone` because openWakeWord captures continuous PCM
+             via AudioRecord. Mutually exclusive at the hardware layer
+             with ObserveForegroundService — only one AudioRecord client
+             at a time. -->
+        <service
+            android:name=".wake.LumiWakeWordService"
+            android:exported="false"
+            android:foregroundServiceType="microphone"
+            tools:targetApi="34" />
+
         <!-- Other services to come:
              * PhoneControlAccessibilityService (M5)
              * NotificationListener (M5)

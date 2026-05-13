@@ -158,6 +158,14 @@ dependencies {
     // language facets to Observe vault records.
     implementation(libs.google.mlkit.language.id)
 
+    // openWakeWord (Re-MENTIA Kotlin wrapper) — on-device wake-word
+    // detection via ONNX Runtime. Drives M8.3a's "Lumi" trigger. The
+    // ONNX model files (`melspectrogram.onnx`, `embedding_model.onnx`,
+    // `lumi.onnx`) live in `app/src/main/assets/` — generated via the
+    // openWakeWord training Colab; see assets/README.md for the
+    // workflow.
+    implementation(libs.rementia.openwakeword)
+
     // M5+ deps deferred until their milestones land:
     //   CameraX (take_photo), SQLCipher (Observe vault), Argon2 (Secret pw)
 }
