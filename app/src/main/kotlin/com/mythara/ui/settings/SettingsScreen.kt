@@ -60,6 +60,7 @@ import kotlinx.coroutines.launch
 fun SettingsScreen(
     onBack: () -> Unit,
     onOpenAbout: () -> Unit = {},
+    onOpenPeople: () -> Unit = {},
     vm: SettingsViewModel = hiltViewModel(),
 ) {
     val state by vm.state.collectAsState()
@@ -439,6 +440,14 @@ fun SettingsScreen(
         LumiListenerPanel()
 
         Spacer(Modifier.height(16.dp))
+        Row(modifier = Modifier.fillMaxWidth()) {
+            TextButton(onClick = onOpenPeople) {
+                Text(
+                    "${Glyph.DiamondFilled} people & analytics  ${Glyph.Arrow}",
+                    color = MytharaColors.Charple,
+                )
+            }
+        }
         Row(modifier = Modifier.fillMaxWidth()) {
             TextButton(onClick = onOpenAbout) {
                 Text("${Glyph.DiamondOutline} about Mythara  ${Glyph.Arrow}", color = MytharaColors.FgMute)

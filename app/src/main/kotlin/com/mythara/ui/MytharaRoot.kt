@@ -103,6 +103,12 @@ fun MytharaRoot(
                             SettingsScreen(
                                 onBack = { nav.popBackStack() },
                                 onOpenAbout = { nav.navigate(Routes.About) },
+                                onOpenPeople = { nav.navigate(Routes.People) },
+                            )
+                        }
+                        composable(Routes.People) {
+                            com.mythara.ui.analytics.PeopleScreen(
+                                onBack = { nav.popBackStack() },
                             )
                         }
                         composable(Routes.About) {
@@ -137,4 +143,5 @@ object Routes {
     const val Settings = "settings"
     const val About = "about"
     const val SecretSettings = "secret"
+    const val People = "people"
 }

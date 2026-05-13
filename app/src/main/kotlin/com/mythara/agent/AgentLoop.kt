@@ -45,6 +45,7 @@ class AgentLoop @Inject constructor(
     private val registry: ToolRegistry,
     private val recall: SemanticRecall,
     private val userNameStore: com.mythara.data.UserNameStore,
+    private val contactProfiles: com.mythara.analytics.ContactProfileRepository,
 ) {
 
     sealed interface Turn {
@@ -281,10 +282,11 @@ class AgentLoop @Inject constructor(
                         "Skipping this step means your reply will be a generic 'photo received' acknowledgement — exactly the failure the user explicitly reported. " +
                         "If read_recent_chat_image returns 'no_image_found', try max_age_seconds=600. If still none, only THEN may you compose a response noting the image hadn't downloaded yet."
                 } else ""
+                val profileBlock = buildContactProfileBlock(parsed.contact)
                 ChatMessage(
                     role = "system",
                     content =
-                        "AUTO-REPLY MODE — you are composing a reply to ${parsed.contact} for the user, on the user's behalf, without asking the user first. They've trusted you with this contact." + imageMandate + "\n\n" +
+                        "AUTO-REPLY MODE — you are composing a reply to ${parsed.contact} for the user, on the user's behalf, without asking the user first. They've trusted you with this contact." + imageMandate + profileBlock + "\n\n" +
                             "Tone: ${tone.label}. ${tone.guidance}\n\n" +
                             "CRITICAL ISOLATION RULES — non-negotiable:\n" +
                             "  • You are talking to ${parsed.contact} and ONLY ${parsed.contact}.\n" +
@@ -919,6 +921,70 @@ class AgentLoop @Inject constructor(
         val app = tokens["app"].orEmpty()
         val hasImage = tokens["has_image"].equals("true", ignoreCase = true)
         return AutoTriageHeader(sender = sender, app = app, hasImage = hasImage)
+    }
+
+    /**
+     * Builds the per-contact profile block that gets prepended to the
+     * auto-reply system message when the analytics layer has data on
+     * this person. Includes:
+     *   - relationship summary (paragraph from Gemma)
+     *   - Big Five scores (as a one-line shorthand)
+     *   - notable traits
+     *   - top topics
+     * Returns "" when no profile exists / sample is too small — the
+     * model proceeds with its tone + isolation rules only.
+     *
+     * The model uses this to TUNE the reply: high-extraversion +
+     * playful traits → looser, more energetic phrasing; high-
+     * conscientiousness + measured traits → more precise; high-
+     * neuroticism on the recipient + a stressful topic → softer
+     * reassurance.
+     */
+    private suspend fun buildContactProfileBlock(contactName: String): String {
+        val key = contactName.trim().lowercase()
+        if (key.isEmpty()) return ""
+        val profile = runCatching { contactProfiles.dao.byKey(key) }.getOrNull() ?: return ""
+
+        val parts = mutableListOf<String>()
+        profile.relationshipSummary?.takeIf { it.isNotBlank() }?.let {
+            parts.add("Relationship summary: $it")
+        }
+        if (profile.openness != null) {
+            // Big Five rendered as compact shorthand. The model
+            // already knows what the trait names mean; no need to
+            // over-explain.
+            val b = StringBuilder("Big Five read on ${profile.displayName}: ")
+            b.append("openness=").append(fmt(profile.openness))
+            b.append(", conscientiousness=").append(fmt(profile.conscientiousness))
+            b.append(", extraversion=").append(fmt(profile.extraversion))
+            b.append(", agreeableness=").append(fmt(profile.agreeableness))
+            b.append(", neuroticism=").append(fmt(profile.neuroticism))
+            b.append(" (estimated from ${profile.bigFiveSampleSize} samples; lean on this LIGHTLY — it's a read, not a label).")
+            parts.add(b.toString())
+        }
+        val traits = parseJsonStringList(profile.notableTraitsJson)
+        if (traits.isNotEmpty()) {
+            parts.add("Notable traits: " + traits.joinToString(", "))
+        }
+        val topics = parseJsonStringList(profile.topTopicsJson)
+        if (topics.isNotEmpty()) {
+            parts.add("Topics the user often discusses with them: " + topics.joinToString(", "))
+        }
+        if (parts.isEmpty()) return ""
+        return "\n\n— What Lumi knows about ${profile.displayName} —\n" + parts.joinToString("\n") + "\n" +
+            "Use these to TUNE your reply — don't paraphrase them back to the recipient, don't mention them explicitly. " +
+            "They're context for picking the right register and energy for THIS reply, nothing more."
+    }
+
+    private fun fmt(v: Double?): String = if (v == null) "?" else "%.2f".format(v)
+
+    private fun parseJsonStringList(s: String?): List<String> {
+        if (s.isNullOrBlank()) return emptyList()
+        return runCatching {
+            (MiniMaxClient.json.parseToJsonElement(s) as? kotlinx.serialization.json.JsonArray)
+                ?.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
+                ?: emptyList()
+        }.getOrDefault(emptyList())
     }
 
     private fun parseAutoReplyHeader(userText: String): AutoReplyHeader? {

@@ -98,6 +98,16 @@ class LearningVault @Inject constructor(
     suspend fun listByTier(tier: Tier, limit: Int = 100): List<LearningEntity> = dao.listByTier(tier.code, limit)
     suspend fun unsyncedRecords(): List<LearningEntity> = dao.listUnsynced()
 
+    /**
+     * Full vault dump. Used by [com.mythara.analytics.ContactAnalyticsBuilder]
+     * which groups by `contact:<name>` facet in code rather than via SQL
+     * (facets is a JSON column). Fine for the small-to-moderate vault
+     * sizes Mythara realistically reaches; if growth ever pushes this
+     * past tens of thousands of rows, swap to a `WHERE facets LIKE
+     * '%"contact:%'` indexed query.
+     */
+    suspend fun listAll(): List<LearningEntity> = dao.listAll()
+
     suspend fun markSynced(id: String, now: Long = System.currentTimeMillis()) {
         dao.markSynced(id, now)
     }
