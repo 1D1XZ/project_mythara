@@ -1,8 +1,17 @@
 package com.mythara.agent
 
 import com.mythara.agent.tools.BatteryTool
+import com.mythara.agent.tools.CreateCalendarEventTool
+import com.mythara.agent.tools.FlashlightTool
+import com.mythara.agent.tools.GetLocationTool
+import com.mythara.agent.tools.ListAppsTool
+import com.mythara.agent.tools.ListCalendarEventsTool
+import com.mythara.agent.tools.OpenAppTool
+import com.mythara.agent.tools.PlaceCallTool
+import com.mythara.agent.tools.ReadContactTool
 import com.mythara.agent.tools.ReadNotificationsTool
 import com.mythara.agent.tools.ReadScreenTool
+import com.mythara.agent.tools.SmsComposerTool
 import com.mythara.agent.tools.TakePhotoTool
 import com.mythara.agent.tools.TimeTool
 import com.mythara.agent.tools.WebFetchTool
@@ -32,9 +41,23 @@ class ToolRegistry @Inject constructor(
     readScreenTool: ReadScreenTool,
     readNotificationsTool: ReadNotificationsTool,
     takePhotoTool: TakePhotoTool,
+    getLocationTool: GetLocationTool,
+    readContactTool: ReadContactTool,
+    listCalendarEventsTool: ListCalendarEventsTool,
+    createCalendarEventTool: CreateCalendarEventTool,
+    smsComposerTool: SmsComposerTool,
+    placeCallTool: PlaceCallTool,
+    flashlightTool: FlashlightTool,
+    openAppTool: OpenAppTool,
+    listAppsTool: ListAppsTool,
 ) {
     private val tools: List<Tool> = listOf(
-        timeTool, batteryTool, webFetchTool, readScreenTool, readNotificationsTool, takePhotoTool,
+        timeTool, batteryTool, webFetchTool,
+        readScreenTool, readNotificationsTool, takePhotoTool,
+        getLocationTool, readContactTool,
+        listCalendarEventsTool, createCalendarEventTool,
+        smsComposerTool, placeCallTool,
+        flashlightTool, openAppTool, listAppsTool,
     )
     private val byName: Map<String, Tool> = tools.associateBy { it.name }
 
