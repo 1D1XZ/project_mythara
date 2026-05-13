@@ -54,6 +54,14 @@ data class AuditEntry(
     @ColumnInfo(name = "latency_ms") val latencyMs: Long = 0L,
     /** Free-form note for non-tool entries (e.g. "subagent spawned: research"). */
     val note: String? = null,
+    /**
+     * Resolved contact display name when this entry targets a phone
+     * number (send_sms_direct / place_call_direct / send_whatsapp_direct).
+     * Null when no match exists in Favorites or the system address book,
+     * or when the tool doesn't carry a `to` arg. Lets the audit panel
+     * render "Mom (+15551234567)" instead of bare digits.
+     */
+    @ColumnInfo(name = "contact_name") val contactName: String? = null,
 )
 
 @Dao
@@ -77,14 +85,20 @@ interface AuditDao {
     suspend fun pruneBefore(cutoffMillis: Long): Int
 }
 
-@Database(entities = [AuditEntry::class], version = 1, exportSchema = false)
+@Database(entities = [AuditEntry::class], version = 2, exportSchema = false)
 abstract class AuditDb : RoomDatabase() {
     abstract fun entries(): AuditDao
 }
 
 @Singleton
 class AuditRepository @Inject constructor(@ApplicationContext ctx: Context) {
-    private val db: AuditDb = Room.databaseBuilder(ctx, AuditDb::class.java, "mythara_audit.db").build()
+    // Audit history is intentionally ephemeral — destructive migration
+    // on schema bump is the right tradeoff vs writing a full migration
+    // for every column add. The user can already clear the log from
+    // Settings; treating a schema bump like a "clear" is consistent.
+    private val db: AuditDb = Room.databaseBuilder(ctx, AuditDb::class.java, "mythara_audit.db")
+        .fallbackToDestructiveMigration()
+        .build()
     val dao: AuditDao = db.entries()
 }
 
@@ -98,7 +112,10 @@ class AuditRepository @Inject constructor(@ApplicationContext ctx: Context) {
  * the agent loop because of a transient SQLite hiccup.
  */
 @Singleton
-class AuditLogger @Inject constructor(private val repo: AuditRepository) {
+class AuditLogger @Inject constructor(
+    private val repo: AuditRepository,
+    private val contactLookup: ContactLookup,
+) {
 
     suspend fun logToolCall(
         toolName: String,
@@ -108,6 +125,18 @@ class AuditLogger @Inject constructor(private val repo: AuditRepository) {
         latencyMs: Long,
     ) {
         runCatching {
+            // Resolve the contact name when this is a phone-targeted
+            // tool. Cheap (favorites is in-process, PhoneLookup is one
+            // ContentProvider query) and the audit panel becomes
+            // instantly more readable: "send_sms_direct → Mom (+1…)"
+            // beats "send_sms_direct → +15551234567" for skimming.
+            val resolvedName: String? = if (toolName in PHONE_TARGETED_TOOLS) {
+                val to = extractPhone(argsJson)
+                if (to != null) {
+                    runCatching { contactLookup.nameForPhone(to) }.getOrNull()
+                } else null
+            } else null
+
             withContext(Dispatchers.IO) {
                 repo.dao.insert(
                     AuditEntry(
@@ -118,11 +147,24 @@ class AuditLogger @Inject constructor(private val repo: AuditRepository) {
                         resultOk = ok,
                         resultPreview = preview(output),
                         latencyMs = latencyMs,
+                        contactName = resolvedName,
                     ),
                 )
             }
         }
     }
+
+    /**
+     * Pull the `to` phone string out of a tool's args JSON. Used by
+     * the audit-row contact resolver. Returns null when the field is
+     * absent or the JSON is malformed; either way we just skip the
+     * lookup.
+     */
+    private fun extractPhone(argsJson: String): String? = runCatching {
+        val obj = kotlinx.serialization.json.Json
+            .parseToJsonElement(argsJson.ifBlank { "{}" }) as? kotlinx.serialization.json.JsonObject
+        (obj?.get("to") as? kotlinx.serialization.json.JsonPrimitive)?.content
+    }.getOrNull()
 
     suspend fun logRedirect(fromName: String, toName: String) {
         runCatching {
@@ -201,5 +243,16 @@ class AuditLogger @Inject constructor(private val repo: AuditRepository) {
 
     companion object {
         private const val PREVIEW_CHARS = 200
+
+        /**
+         * Tools whose first-position argument is a phone number — the
+         * ones the contact lookup is meaningful for. Adding new ones
+         * is purely additive (no per-tool wiring needed elsewhere).
+         */
+        private val PHONE_TARGETED_TOOLS: Set<String> = setOf(
+            "send_sms_direct",
+            "send_whatsapp_direct",
+            "place_call_direct",
+        )
     }
 }

@@ -210,11 +210,29 @@ private fun AuditRow(e: AuditEntry) {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                text = "$statusGlyph ${e.toolName ?: e.kind}",
-                color = statusColor,
-                style = MaterialTheme.typography.bodyMedium,
-            )
+            // Tool name + resolved contact when present. The contact
+            // tag (in Charple/brand colour) makes "send to Mom" stand
+            // out so a quick scroll-through is enough to confirm a
+            // message went where the user expected.
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "$statusGlyph ${e.toolName ?: e.kind}",
+                    color = statusColor,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                e.contactName?.let { name ->
+                    Text(
+                        text = "  · to ",
+                        color = MytharaColors.FgMute,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Text(
+                        text = name,
+                        color = MytharaColors.Charple,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
             Text(
                 text = formatTs(e.tsMillis) + if (e.latencyMs > 0) "  ·  ${e.latencyMs}ms" else "",
                 color = MytharaColors.FgDim,
