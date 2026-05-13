@@ -51,6 +51,7 @@ class ObserveForegroundService : Service() {
     @Inject lateinit var store: ObserveStore
     @Inject lateinit var purger: RawDataPurger
     @Inject lateinit var journal: LearningJournal
+    @Inject lateinit var session: ObserveSession
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var heartbeatJob: Job? = null
@@ -66,11 +67,13 @@ class ObserveForegroundService : Service() {
         when (intent?.action) {
             ACTION_START -> startInForeground()
             ACTION_PAUSE -> {
+                session.pause()
                 heartbeatJob?.cancel(); heartbeatJob = null
                 store.publish(ObserveState.Paused(System.currentTimeMillis()))
                 Log.d(TAG, "paused")
             }
             ACTION_RESUME -> {
+                session.resume()
                 store.publish(ObserveState.Running(System.currentTimeMillis()))
                 startHeartbeat()
                 Log.d(TAG, "resumed")
@@ -98,6 +101,18 @@ class ObserveForegroundService : Service() {
                 startForeground(NOTIFICATION_ID, notif)
             }
             store.publish(ObserveState.Running(System.currentTimeMillis()))
+            // Kick off the real ASR session. If the Vosk model isn't on
+            // disk we surface the error and stop; the user will see it
+            // in Secret Settings and can hit the download button.
+            val sessionStart = session.start()
+            if (sessionStart.isFailure) {
+                val why = sessionStart.exceptionOrNull()?.message ?: "session start failed"
+                Log.e(TAG, "ObserveSession.start failed: $why")
+                store.publish(ObserveState.Error(why))
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+                return
+            }
             startHeartbeat()
             Log.d(TAG, "foreground service started")
         } catch (t: Throwable) {
@@ -110,23 +125,19 @@ class ObserveForegroundService : Service() {
     private fun startHeartbeat() {
         heartbeatJob?.cancel()
         heartbeatJob = scope.launch {
-            // Sweep purger on launch so any stale files from a previous
-            // boot get cleaned even before the heartbeat loop runs.
+            // Sweep purger on launch + every tick so audio/transcript
+            // scratch never lingers past its TTL.
             purger.sweep()
             while (isActive) {
                 delay(HEARTBEAT_INTERVAL_MS)
                 if (!isActive) break
                 purger.sweep()
-                journal.append(LearningJournal.Entry(
-                    tsMillis = System.currentTimeMillis(),
-                    kind = "observe",
-                    note = "heartbeat (M8.1a — audio capture lands in M8.1b)",
-                ))
             }
         }
     }
 
     private fun shutdownAndStop() {
+        session.stop()
         heartbeatJob?.cancel(); heartbeatJob = null
         store.publish(ObserveState.Idle)
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -155,6 +166,7 @@ class ObserveForegroundService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        session.stop()
         heartbeatJob?.cancel(); heartbeatJob = null
         if (store.state.value !is ObserveState.Idle) {
             store.publish(ObserveState.Idle)

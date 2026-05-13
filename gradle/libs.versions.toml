@@ -22,6 +22,8 @@ workmanager = "2.10.0"
 hiltWork = "1.2.0"
 biometric = "1.1.0"
 lifecycleProcess = "2.8.7"
+vosk = "0.3.47"
+jna = "5.13.0"
 
 # Deferred — added back when their milestone lands:
 #   camerax  → M5 (take_photo tool)
@@ -74,6 +76,13 @@ tink-android = { group = "com.google.crypto.tink", name = "tink-android", versio
 androidx-work-runtime = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "workmanager" }
 hilt-work = { group = "androidx.hilt", name = "hilt-work", version.ref = "hiltWork" }
 hilt-work-compiler = { group = "androidx.hilt", name = "hilt-compiler", version.ref = "hiltWork" }
+
+# Vosk on-device ASR (M8.1b). Both Vosk and JNA must be pulled as @aar
+# coordinates (not @jar) — JNA ships both flavours on Maven Central and
+# Gradle resolves both unless we pin to @aar explicitly. The @aar qualifier
+# also disables transitive resolution, which is why we don't need to
+# declare JNA twice. Catalog can't carry @aar, so these go into
+# app/build.gradle.kts as explicit string coords.
 
 # Biometric / device-credential unlock at app entry
 androidx-biometric = { group = "androidx.biometric", name = "biometric", version.ref = "biometric" }

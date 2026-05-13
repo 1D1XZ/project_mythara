@@ -1,0 +1,144 @@
+package com.mythara.secret.observe
+
+import android.content.Context
+import android.util.Log
+import com.mythara.growth.LearningJournal
+import com.mythara.secret.observe.vosk.VoskAsr
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import javax.inject.Inject
+import javax.inject.Singleton
+
+/**
+ * The Observe pipeline at run time.
+ *
+ *   AudioRecorder (16 kHz mono PCM)
+ *     ↓ ShortArray frames
+ *   Vosk Recognizer.acceptWaveForm(...)
+ *     ↓ "is this the end of an utterance?"
+ *   YES → final transcript json → write to disk under
+ *         filesDir/observe/transcripts/<isoTs>.txt
+ *         + append a metadata-only journal entry (no transcript text
+ *         in the journal — that's the M8.2 extractor's job)
+ *   NO  → partial transcript (ignored today; reserved for live-UI in M8.2)
+ *
+ * Privacy invariants enforced here:
+ *  - Audio never leaves the device. We don't even hold raw PCM in
+ *    memory past the recogniser's internal buffers; nothing is
+ *    persisted to disk on the audio path.
+ *  - Transcripts live in `filesDir/observe/transcripts/` and are
+ *    auto-purged by [RawDataPurger] after 24h.
+ *  - The journal entry only logs lifecycle ("transcript captured,
+ *    N words") — never the transcript content. M8.2's Gemma
+ *    extractor will lift durable learnings out of these transcripts
+ *    before they purge, and only those condensed learnings make it
+ *    into the synced repo.
+ */
+@Singleton
+class ObserveSession @Inject constructor(
+    @dagger.hilt.android.qualifiers.ApplicationContext private val ctx: Context,
+    private val asr: VoskAsr,
+    private val journal: LearningJournal,
+) {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var job: Job? = null
+
+    @Volatile private var paused: Boolean = false
+    @Volatile private var transcriptCount: Int = 0
+
+    val isRunning: Boolean get() = job?.isActive == true
+    fun transcriptCountSnapshot(): Int = transcriptCount
+
+    fun start(): Result<Unit> {
+        if (isRunning) return Result.success(Unit)
+        if (!asr.isReady()) return Result.failure(IllegalStateException("Vosk model not ready"))
+
+        val recorder = AudioRecorder()
+        if (!recorder.start()) {
+            return Result.failure(IllegalStateException("AudioRecord init failed"))
+        }
+        val recognizer = runCatching { asr.newRecognizer() }.getOrElse {
+            recorder.release()
+            return Result.failure(it)
+        }
+
+        val transcriptsDir = ctx.filesDir.resolve("observe/transcripts").apply { mkdirs() }
+        val buf = ShortArray(recorder.readFrameSamples)
+
+        job = scope.launch {
+            try {
+                while (isActive) {
+                    if (paused) {
+                        // Cheap idle while paused; mic released only on stop().
+                        kotlinx.coroutines.delay(200)
+                        continue
+                    }
+                    val n = recorder.read(buf)
+                    if (n <= 0) continue
+                    val isFinal = recognizer.acceptWaveForm(buf, n)
+                    if (isFinal) {
+                        val text = asr.parseText(recognizer.result)
+                        if (text.isNotBlank()) {
+                            writeTranscript(transcriptsDir, text)
+                            transcriptCount += 1
+                        }
+                    }
+                }
+                // Drain final result on graceful stop.
+                val tail = asr.parseText(recognizer.finalResult)
+                if (tail.isNotBlank()) {
+                    writeTranscript(transcriptsDir, tail)
+                    transcriptCount += 1
+                }
+            } catch (t: Throwable) {
+                Log.e(TAG, "session loop crashed: ${t.message}", t)
+            } finally {
+                runCatching { recognizer.close() }
+                recorder.stop()
+                recorder.release()
+                Log.d(TAG, "session ended; transcripts=$transcriptCount")
+            }
+        }
+        Log.d(TAG, "session started")
+        return Result.success(Unit)
+    }
+
+    fun pause() { paused = true }
+    fun resume() { paused = false }
+
+    fun stop() {
+        paused = false
+        job?.cancel()
+        job = null
+    }
+
+    private suspend fun writeTranscript(dir: File, text: String) {
+        val now = System.currentTimeMillis()
+        val fname = ISO_FMT.format(Date(now)) + ".txt"
+        val file = File(dir, fname)
+        runCatching { file.writeText(text, Charsets.UTF_8) }
+        // Metadata-only journal entry — never the transcript text.
+        journal.append(
+            LearningJournal.Entry(
+                tsMillis = now,
+                kind = "observe",
+                note = "captured transcript (${text.split(Regex("\\s+")).filter { it.isNotBlank() }.size} words)",
+            ),
+        )
+    }
+
+    companion object {
+        private const val TAG = "Mythara/Observe"
+        private val ISO_FMT = SimpleDateFormat("yyyyMMdd'T'HHmmss'_'SSS'Z'", Locale.US).apply {
+            timeZone = java.util.TimeZone.getTimeZone("UTC")
+        }
+    }
+}

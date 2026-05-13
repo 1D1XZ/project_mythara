@@ -22,6 +22,14 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
+
+        // Ship only the architecture we actually run on. Pixels are arm64
+        // exclusively; bundling x86 + armv7a would more-than-double the
+        // APK because of Vosk's native .so + JNA. Sideload audience here
+        // is one device family; if we ever publish broadly, add the rest.
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
     }
 
     buildTypes {
@@ -124,6 +132,15 @@ dependencies {
     // Device-credential / biometric unlock at app entry
     implementation(libs.androidx.biometric)
     implementation(libs.androidx.lifecycle.process)
+
+    // Vosk on-device ASR for Observe mode (M8.1b). Self-contained — model
+    // ships as a lazy-downloaded zip, not bundled in the APK. Both deps
+    // use the @aar qualifier per Vosk's own demo build to:
+    //   1. select the Android-variant native binaries (vs the desktop jar)
+    //   2. disable transitive resolution that otherwise drags JNA's jar
+    //      AND aar variants into the same module → duplicate-class crash
+    implementation("net.java.dev.jna:jna:5.13.0@aar")
+    implementation("com.alphacephei:vosk-android:0.3.47@aar")
 
     // M5+ deps deferred until their milestones land:
     //   CameraX (take_photo), SQLCipher (Observe vault), Argon2 (Secret pw)

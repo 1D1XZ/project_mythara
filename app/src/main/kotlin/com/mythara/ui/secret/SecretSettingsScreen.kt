@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.mythara.secret.observe.ObserveState
+import com.mythara.secret.observe.vosk.VoskModelStore
 import com.mythara.ui.theme.Glyph
 import com.mythara.ui.theme.MytharaColors
 
@@ -220,28 +221,114 @@ fun SecretSettingsScreen(
 
         Spacer(Modifier.height(14.dp))
 
-        Panel("today (m8.1a)") {
-            Bullet("foreground service skeleton with the right FGS types")
-            Bullet("persistent notification + tap-to-open")
-            Bullet("heartbeat journal entry every 30s while running")
-            Bullet("RawDataPurger ready — sweeps observe/ scratch on each tick")
-            Bullet("'forget everything' wipes scratch + journal in one shot")
+        Panel("speech model (Vosk en-us, ~40MB)") {
+            when (val ms = state.modelState) {
+                is VoskModelStore.State.Ready -> Text(
+                    text = "${Glyph.Check} model ready", color = MytharaColors.Julep,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                is VoskModelStore.State.Missing -> {
+                    Text(
+                        text = "${Glyph.Cross} not downloaded — required for transcription.",
+                        color = MytharaColors.Sriracha, style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Button(
+                        onClick = { vm.ensureModel() },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MytharaColors.Charple, contentColor = MytharaColors.Fg,
+                        ),
+                    ) { Text("${Glyph.Arrow} download model (40MB)") }
+                }
+                is VoskModelStore.State.Downloading -> Text(
+                    text = "${Glyph.Ellipsis} downloading ${ms.pct}%",
+                    color = MytharaColors.Citron, style = MaterialTheme.typography.bodyMedium,
+                )
+                is VoskModelStore.State.Extracting -> Text(
+                    text = "${Glyph.Ellipsis} extracting…", color = MytharaColors.Citron,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                is VoskModelStore.State.Failed -> {
+                    Text(
+                        text = "${Glyph.Cross} failed: ${ms.message}",
+                        color = MytharaColors.Sriracha,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Button(
+                        onClick = { vm.ensureModel() },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MytharaColors.Charple, contentColor = MytharaColors.Fg,
+                        ),
+                    ) { Text("${Glyph.Refresh} retry") }
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "${Glyph.AccentBar} the model runs entirely on-device. no audio leaves the phone.",
+                color = MytharaColors.FgDim,
+                style = MaterialTheme.typography.bodySmall.copy(letterSpacing = 1.sp),
+            )
         }
 
         Spacer(Modifier.height(14.dp))
 
-        Panel("coming in m8.1b") {
-            Bullet("AudioRecord pipeline + VAD silence gating")
-            Bullet("offline ASR via Vosk small-model")
-            Bullet("raw PCM auto-purged 60s after transcribe")
-            Bullet("transcripts purged 24h after extraction")
-            Bullet("learning extraction via on-device MediaPipe Gemma (m8.2)")
-            Bullet("encrypted vault browser (m8.2)")
+        Panel("recent transcripts (this device only)") {
+            Text(
+                text = "${state.recentTranscripts.size} stored locally · session total: ${state.transcriptCount}",
+                color = MytharaColors.FgDim,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Spacer(Modifier.height(8.dp))
+            if (state.recentTranscripts.isEmpty()) {
+                Text(
+                    text = "${Glyph.CircleOutline} nothing captured yet.",
+                    color = MytharaColors.FgMute,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            } else {
+                state.recentTranscripts.forEach { tp ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 3.dp),
+                        verticalAlignment = Alignment.Top,
+                    ) {
+                        Text(
+                            text = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
+                                .format(java.util.Date(tp.tsMs)),
+                            color = MytharaColors.FgDim,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(end = 8.dp),
+                        )
+                        Text(
+                            text = tp.text.take(160) + if (tp.text.length > 160) "…" else "",
+                            color = MytharaColors.Fg,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { vm.refreshTranscripts() },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MytharaColors.Surface, contentColor = MytharaColors.Fg,
+                        ),
+                    ) { Text("${Glyph.Refresh} refresh") }
+                    Button(
+                        onClick = { vm.clearTranscripts() },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MytharaColors.Sriracha, contentColor = MytharaColors.Fg,
+                        ),
+                    ) { Text("${Glyph.Cross} clear") }
+                }
+            }
             Spacer(Modifier.height(6.dp))
             Text(
-                text = "${Glyph.AccentBar} audio + transcripts never leave the device.",
+                text = "${Glyph.AccentBar} transcripts auto-purge after 24h. only condensed learnings (M8.2) sync to GitHub.",
                 color = MytharaColors.FgDim,
-                style = MaterialTheme.typography.bodySmall.copy(letterSpacing = 1.sp),
+                style = MaterialTheme.typography.bodySmall,
             )
         }
 

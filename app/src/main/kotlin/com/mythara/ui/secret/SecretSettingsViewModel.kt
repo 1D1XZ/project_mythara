@@ -7,8 +7,10 @@ import android.os.Build
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.mythara.secret.observe.ObserveSession
 import com.mythara.secret.observe.ObserveState
 import com.mythara.secret.observe.ObserveStore
+import com.mythara.secret.observe.vosk.VoskModelStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,6 +18,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.io.File
 import javax.inject.Inject
 
 /**
@@ -27,6 +30,8 @@ import javax.inject.Inject
 class SecretSettingsViewModel @Inject constructor(
     @ApplicationContext private val ctx: Context,
     private val store: ObserveStore,
+    private val voskModel: VoskModelStore,
+    private val session: ObserveSession,
 ) : ViewModel() {
 
     data class State(
@@ -36,9 +41,15 @@ class SecretSettingsViewModel @Inject constructor(
         /** True on Android < 13: notification permission is implicit, no prompt needed. */
         val notifRequired: Boolean = false,
         val confirmingForget: Boolean = false,
+        val modelState: VoskModelStore.State = VoskModelStore.State.Missing,
+        val transcriptCount: Int = 0,
+        val recentTranscripts: List<TranscriptPreview> = emptyList(),
     ) {
-        val readyToStart: Boolean get() = micGranted && (!notifRequired || notifGranted)
+        val readyToStart: Boolean
+            get() = micGranted && (!notifRequired || notifGranted) && modelState is VoskModelStore.State.Ready
     }
+
+    data class TranscriptPreview(val tsMs: Long, val text: String)
 
     private val _state = MutableStateFlow(State(observeState = store.state.value))
     val state: StateFlow<State> = _state.asStateFlow()
@@ -47,9 +58,53 @@ class SecretSettingsViewModel @Inject constructor(
         viewModelScope.launch {
             store.state.collect { s ->
                 _state.update { it.copy(observeState = s) }
+                // Whenever we transition into Running, refresh the recent
+                // transcripts list so the user sees them appear live.
+                if (s is ObserveState.Running) refreshTranscripts()
+            }
+        }
+        viewModelScope.launch {
+            voskModel.state.collect { ms ->
+                _state.update { it.copy(modelState = ms) }
             }
         }
         refreshPermission()
+        refreshTranscripts()
+    }
+
+    fun ensureModel() {
+        viewModelScope.launch { voskModel.ensureReady() }
+    }
+
+    fun refreshTranscripts() {
+        val dir = File(ctx.filesDir, "observe/transcripts")
+        val previews = if (!dir.exists()) emptyList() else {
+            dir.listFiles()
+                ?.filter { it.isFile }
+                ?.sortedByDescending { it.lastModified() }
+                ?.take(MAX_PREVIEW)
+                ?.map { f ->
+                    TranscriptPreview(
+                        tsMs = f.lastModified(),
+                        text = runCatching { f.readText(Charsets.UTF_8) }.getOrDefault(""),
+                    )
+                }
+                .orEmpty()
+        }
+        _state.update {
+            it.copy(
+                recentTranscripts = previews,
+                transcriptCount = session.transcriptCountSnapshot(),
+            )
+        }
+    }
+
+    fun clearTranscripts() {
+        viewModelScope.launch {
+            val dir = File(ctx.filesDir, "observe/transcripts")
+            if (dir.exists()) dir.listFiles()?.forEach { it.delete() }
+            refreshTranscripts()
+        }
     }
 
     fun refreshPermission() {
@@ -99,5 +154,11 @@ class SecretSettingsViewModel @Inject constructor(
     fun confirmForget() {
         _state.update { it.copy(confirmingForget = false) }
         store.forgetEverything()
+        viewModelScope.launch {
+            voskModel.forgetModel()
+            refreshTranscripts()
+        }
     }
+
+    companion object { private const val MAX_PREVIEW = 8 }
 }
