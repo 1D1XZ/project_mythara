@@ -471,16 +471,22 @@ private fun ChatHeader(
             // pending/claimed/running tasks anywhere in the cluster.
             TasksPill(onClick = onOpenTasks)
             Spacer(Modifier.size(8.dp))
+            // Settings — gear icon only. Pills above each carry a
+            // distinct visible accent (Bok / Mustard / Charple /
+            // Malibu); Settings is the muted "tap to configure"
+            // affordance so it stays out of the visual hierarchy.
+            // Compact icon-only also saves horizontal space on
+            // compact phones now that the header is six pills deep.
             Box(
                 modifier = Modifier
                     .clip(CircleShape)
                     .background(MytharaColors.Surface)
                     .border(1.dp, MytharaColors.SurfaceHigh, CircleShape)
                     .clickable(onClick = onOpenSettings)
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
             ) {
                 Text(
-                    text = "${Glyph.DiamondOutline} settings",
+                    text = "⚙",
                     style = MaterialTheme.typography.labelMedium.copy(color = MytharaColors.FgMute),
                 )
             }

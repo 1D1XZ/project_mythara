@@ -74,6 +74,7 @@ class ToolRegistry @Inject constructor(
     sendNoteToDeviceTool: com.mythara.agent.tools.SendNoteToDeviceTool,
     createTaskTool: com.mythara.agent.tools.CreateTaskTool,
     teamCallTool: com.mythara.agent.tools.TeamCallTool,
+    private val mcpRegistry: com.mythara.mcp.McpRegistry,
     private val gate: ConfirmationGate,
     private val allowlist: com.mythara.data.AllowlistStore,
     private val confirmationSettings: ConfirmationSettings,
@@ -82,7 +83,10 @@ class ToolRegistry @Inject constructor(
     private val autoReplyPrefix: com.mythara.data.AutoReplyPrefixStore,
     private val convWriter: ConversationMessageWriter,
 ) {
-    private val tools: List<Tool> = listOf(
+    /** Static tools defined in-app. MCP-discovered tools are merged on
+     *  demand via [tools] / [byName] so adding an MCP server doesn't
+     *  require a process restart. */
+    private val nativeTools: List<Tool> = listOf(
         timeTool, batteryTool, webFetchTool,
         readScreenTool, readNotificationsTool, takePhotoTool,
         getLocationTool, readContactTool,
@@ -109,7 +113,15 @@ class ToolRegistry @Inject constructor(
         createTaskTool,
         teamCallTool,
     )
-    private val byName: Map<String, Tool> = tools.associateBy { it.name }
+
+    /** Native + currently-known MCP tools, merged. Recomputed on every
+     *  access — the MCP registry is a live snapshot and we want the
+     *  agent to see new MCP tools the moment they're discovered. */
+    private val tools: List<Tool>
+        get() = nativeTools + mcpRegistry.asMytharaTools()
+
+    private val byName: Map<String, Tool>
+        get() = tools.associateBy { it.name }
 
     /**
      * Composer-style names the model still tries from training bias

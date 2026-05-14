@@ -42,6 +42,13 @@ class SkillStore @Inject constructor(
             add("kind:skill")
             add("skill-name:${skill.name}")
             add("skill-version:${skill.version}")
+            // topic: facet drives MemorySync's grouping — skills land
+            // in semantic/skill.jsonl on the memory repo (instead of
+            // mingled into semantic/misc.jsonl with everything else),
+            // so peers see the skill ledger as a coherent file and
+            // can pick up new skills cross-device on the very next
+            // 5-min heartbeat sync.
+            add("topic:skill")
         }
         return runCatching {
             vault.add(

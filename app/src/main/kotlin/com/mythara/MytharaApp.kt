@@ -9,6 +9,7 @@ import com.mythara.agent.queue.PendingReplyKickScheduler
 import com.mythara.agent.queue.PendingReplyQueue
 import com.mythara.lifeline.LifelineScheduler
 import com.mythara.lifeline.MediaStoreObserver
+import com.mythara.mcp.McpRegistry
 import com.mythara.memory.HeartbeatSyncer
 import com.mythara.analytics.ContactAnalyticsScheduler
 import com.mythara.agent.SelfOrganizerScheduler
@@ -54,6 +55,7 @@ class MytharaApp : Application(), Configuration.Provider {
     @Inject lateinit var lifelineScheduler: LifelineScheduler
     @Inject lateinit var mediaStoreObserver: MediaStoreObserver
     @Inject lateinit var heartbeatSyncer: HeartbeatSyncer
+    @Inject lateinit var mcpRegistry: McpRegistry
 
     // App-scoped supervisor for fire-and-forget process-level
     // coroutines (settings-flow observers etc.). Cancelled implicitly
@@ -110,6 +112,10 @@ class MytharaApp : Application(), Configuration.Provider {
         // 5-minute heartbeat — fires memory sync + cross-device task
         // pickup on a coroutine timer. Self-gates when sync is off.
         heartbeatSyncer.start()
+        // MCP registry — observes config DataStore + maintains a live
+        // snapshot of every tool the configured MCP servers expose.
+        // ToolRegistry merges these into its tool list on demand.
+        mcpRegistry.start()
         // Reflect the user's persistent-talk-notification preference
         // on every cold start (and follow live toggles while the
         // process is alive). Observing the Flow rather than reading

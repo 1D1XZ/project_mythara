@@ -437,6 +437,12 @@ fun SettingsScreen(
         NotificationAccessPanel()
 
         Spacer(Modifier.height(16.dp))
+        SkillsPanel()
+
+        Spacer(Modifier.height(16.dp))
+        McpServersPanel()
+
+        Spacer(Modifier.height(16.dp))
         RerunOnboardingPanel()
 
         Spacer(Modifier.height(16.dp))
