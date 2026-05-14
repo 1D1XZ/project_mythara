@@ -11,7 +11,13 @@ android {
     // the phone-app module so the toolchain matches.
     compileSdk = 36
     defaultConfig {
-        applicationId = "com.mythara.debug.wear"
+        // MUST match the phone app's applicationId exactly. The Wearable
+        // Data Layer delivers MessageClient.sendMessage only to the app
+        // with the *same package name* on the peer node — a mismatched
+        // id means the phone's WearableListenerService never fires and
+        // PTT silently goes nowhere. So: base id == phone base id, and
+        // the debug buildType carries the same `.debug` suffix below.
+        applicationId = "com.mythara"
         minSdk = 30
         targetSdk = 36
         versionCode = 1
@@ -28,9 +34,10 @@ android {
     buildTypes {
         debug {
             isMinifyEnabled = false
-            // Same applicationId suffix as the phone-app debug build
-            // so the two stay paired by the system (Wear OS pairs by
-            // package name).
+            // Same `.debug` suffix as the phone-app debug build → both
+            // resolve to `com.mythara.debug`, so the system pairs them
+            // and the Data Layer routes between them.
+            applicationIdSuffix = ".debug"
         }
     }
     packaging {

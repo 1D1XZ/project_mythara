@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Mythara TACTICAL watch face — Watch Face Format.
+  Resource-only: hasCode=false, no service declaration. Wear OS
+  auto-discovers res/raw/watchface.xml and renders it.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-feature android:name="android.hardware.type.watch" />
+
+    <application
+        android:label="@string/watch_face_name"
+        android:hasCode="false"
+        android:icon="@drawable/preview">
+
+        <!-- Standalone — runs on a watch paired with any phone (or none). -->
+        <meta-data
+            android:name="com.google.android.wearable.standalone"
+            android:value="true" />
+
+        <!-- Declares this APK as a Watch Face Format bundle. v2 = Wear OS 5+
+             (the Galaxy Watch target); covers <Localization> world clocks. -->
+        <property
+            android:name="com.google.wear.watchface.format.version"
+            android:value="2" />
+    </application>
+</manifest>

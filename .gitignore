@@ -29,6 +29,9 @@ release.jks
 # OS
 Thumbs.db
 
+# Claude Code session data + worktrees
+.claude/
+
 # Test / coverage outputs
 **/test-results/
 **/jacoco/

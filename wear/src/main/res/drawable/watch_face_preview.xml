@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Preview thumbnail shown in Wear OS's watch face picker. Static
-  vector mirroring the live face's brand: dark bg, big time-of-day
-  stroke, Charple wordmark stroke (gradient is for the live render),
-  dim date hint. ~280×280 viewport matches the canonical Wear OS
-  preview size.
+  Watch-face picker thumbnail — static vector approximation of the live
+  TACTICAL face: dark field, a tick bezel, the geometric rose emblem up
+  top, two time bars (IND / USA) inside HUD corner brackets, a dim date
+  bar. The live CanvasRenderer paints the real thing; this just has to
+  read as "tactical, dual-time, Mythara" in the picker grid.
+  280×280 viewport = the canonical Wear OS preview size.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="280dp"
@@ -17,25 +18,52 @@
         android:pathData="M0,0 L280,0 L280,280 L0,280 Z"
         android:fillColor="#201F26" />
 
-    <!-- HH:MM placeholder bar -->
-    <path
-        android:pathData="M70,148 L210,148"
-        android:strokeColor="#DFDBDD"
-        android:strokeWidth="46"
-        android:strokeLineCap="butt" />
+    <!-- Cardinal ticks — Bok mint, long -->
+    <path android:pathData="M140,8 L140,26" android:strokeColor="#68FFD6" android:strokeWidth="5" />
+    <path android:pathData="M272,140 L254,140" android:strokeColor="#68FFD6" android:strokeWidth="5" />
+    <path android:pathData="M140,272 L140,254" android:strokeColor="#68FFD6" android:strokeWidth="5" />
+    <path android:pathData="M8,140 L26,140" android:strokeColor="#68FFD6" android:strokeWidth="5" />
 
-    <!-- MYTHARA wordmark stroke (flat Charple in the preview; the
-         live face renders the Charple→Bok linear gradient). -->
-    <path
-        android:pathData="M88,200 L192,200"
-        android:strokeColor="#6B50FF"
-        android:strokeWidth="11"
-        android:strokeLineCap="butt" />
+    <!-- Diagonal ticks — dim grey, short -->
+    <path android:pathData="M231.9,48.1 L224.85,55.15" android:strokeColor="#605F6B" android:strokeWidth="3" />
+    <path android:pathData="M231.9,231.9 L224.85,224.85" android:strokeColor="#605F6B" android:strokeWidth="3" />
+    <path android:pathData="M48.1,231.9 L55.15,224.85" android:strokeColor="#605F6B" android:strokeWidth="3" />
+    <path android:pathData="M48.1,48.1 L55.15,55.15" android:strokeColor="#605F6B" android:strokeWidth="3" />
 
-    <!-- Date placeholder bar -->
-    <path
-        android:pathData="M112,224 L168,224"
-        android:strokeColor="#605F6B"
-        android:strokeWidth="4"
-        android:strokeLineCap="butt" />
+    <!-- Geometric rose emblem (from the launcher icon) — 5 outer kite
+         petals + 5 inner + a Bok hex core, centred at (140,70). -->
+    <group android:translateX="140" android:translateY="70" android:scaleX="0.8" android:scaleY="0.8">
+        <group android:rotation="0"><path android:fillColor="#6B50FF" android:pathData="M0,0 L-3,-16 L0,-30 L3,-16 Z" /></group>
+        <group android:rotation="72"><path android:fillColor="#6B50FF" android:pathData="M0,0 L-3,-16 L0,-30 L3,-16 Z" /></group>
+        <group android:rotation="144"><path android:fillColor="#6B50FF" android:pathData="M0,0 L-3,-16 L0,-30 L3,-16 Z" /></group>
+        <group android:rotation="216"><path android:fillColor="#6B50FF" android:pathData="M0,0 L-3,-16 L0,-30 L3,-16 Z" /></group>
+        <group android:rotation="288"><path android:fillColor="#6B50FF" android:pathData="M0,0 L-3,-16 L0,-30 L3,-16 Z" /></group>
+        <group android:rotation="36"><path android:fillColor="#4F3CD9" android:pathData="M0,0 L-2,-10 L0,-18 L2,-10 Z" /></group>
+        <group android:rotation="108"><path android:fillColor="#4F3CD9" android:pathData="M0,0 L-2,-10 L0,-18 L2,-10 Z" /></group>
+        <group android:rotation="180"><path android:fillColor="#4F3CD9" android:pathData="M0,0 L-2,-10 L0,-18 L2,-10 Z" /></group>
+        <group android:rotation="252"><path android:fillColor="#4F3CD9" android:pathData="M0,0 L-2,-10 L0,-18 L2,-10 Z" /></group>
+        <group android:rotation="324"><path android:fillColor="#4F3CD9" android:pathData="M0,0 L-2,-10 L0,-18 L2,-10 Z" /></group>
+        <path android:fillColor="#68FFD6" android:pathData="M0,-5 L4.33,-2.5 L4.33,2.5 L0,5 L-4.33,2.5 L-4.33,-2.5 Z" />
+    </group>
+
+    <!-- HUD corner brackets around the time block -->
+    <path android:pathData="M75,118 L91,118" android:strokeColor="#6B50FF" android:strokeWidth="3" />
+    <path android:pathData="M75,118 L75,134" android:strokeColor="#6B50FF" android:strokeWidth="3" />
+    <path android:pathData="M205,118 L189,118" android:strokeColor="#6B50FF" android:strokeWidth="3" />
+    <path android:pathData="M205,118 L205,134" android:strokeColor="#6B50FF" android:strokeWidth="3" />
+    <path android:pathData="M75,212 L91,212" android:strokeColor="#6B50FF" android:strokeWidth="3" />
+    <path android:pathData="M75,212 L75,196" android:strokeColor="#6B50FF" android:strokeWidth="3" />
+    <path android:pathData="M205,212 L189,212" android:strokeColor="#6B50FF" android:strokeWidth="3" />
+    <path android:pathData="M205,212 L205,196" android:strokeColor="#6B50FF" android:strokeWidth="3" />
+
+    <!-- IND label + time bar -->
+    <path android:pathData="M118,131 L162,131" android:strokeColor="#8E8A95" android:strokeWidth="4" />
+    <path android:pathData="M92,152 L188,152" android:strokeColor="#EDE9EB" android:strokeWidth="22" />
+
+    <!-- USA label + time bar -->
+    <path android:pathData="M118,179 L162,179" android:strokeColor="#8E8A95" android:strokeWidth="4" />
+    <path android:pathData="M92,200 L188,200" android:strokeColor="#EDE9EB" android:strokeWidth="22" />
+
+    <!-- Date readout -->
+    <path android:pathData="M110,232 L170,232" android:strokeColor="#605F6B" android:strokeWidth="4" />
 </vector>

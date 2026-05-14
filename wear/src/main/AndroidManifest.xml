@@ -9,6 +9,20 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Short haptic when a fresh Mythara agent message arrives. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Heart-rate sensor sampling + the foreground service hosting it.
+         BODY_SENSORS gates the sensor read; HIGH_SAMPLING_RATE_SENSORS
+         (install-time, no prompt) satisfies the API 34+ "health" FGS
+         type's "any of" permission requirement. -->
+    <uses-permission android:name="android.permission.BODY_SENSORS" />
+    <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_HEALTH" />
+    <!-- Coarse location is enough to resolve a weather lat/lon for the
+         PTT screen's current-conditions readout. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 
     <!-- Required for the watch face service to render at all. -->
     <uses-permission android:name="android.permission.BIND_WALLPAPER" />
@@ -32,6 +46,7 @@
             android:name=".MainActivity"
             android:exported="true"
             android:taskAffinity=""
+            android:screenOrientation="nosensor"
             android:theme="@android:style/Theme.DeviceDefault">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -39,32 +54,108 @@
             </intent-filter>
         </activity>
 
-        <!-- Mythara-branded watch face. CanvasRenderer with dark Bg
-             + monospace HH:MM + Charple→Bok wordmark + dim date.
-             Picker preview lives in @drawable/watch_face_preview.
-             User installs by long-pressing the current face on the
-             watch, scrolling to "Mythara", and tapping. -->
-        <service
-            android:name=".watchface.MytharaWatchFaceService"
+        <!-- Standalone push-to-talk entry point. Its own MAIN/LAUNCHER
+             intent filter means it shows up as a separate selectable
+             target ("Mythara PTT") in the Galaxy Watch "Customize keys"
+             picker — assign it to the Action button for one-press
+             push-to-talk to the agent. Opens straight into listening,
+             ships the transcript, and closes. -->
+        <activity
+            android:name=".PttActivity"
             android:exported="true"
-            android:label="@string/app_name"
-            android:permission="android.permission.BIND_WALLPAPER">
+            android:taskAffinity=""
+            android:excludeFromRecents="true"
+            android:screenOrientation="nosensor"
+            android:label="Mythara PTT"
+            android:icon="@android:drawable/ic_btn_speak_now"
+            android:theme="@android:style/Theme.DeviceDefault">
             <intent-filter>
-                <action android:name="android.service.wallpaper.WallpaperService" />
-                <category android:name="com.google.android.wearable.watchface.category.WATCH_FACE" />
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Insight complication — feeds the Mythara Tactical WFF face's
+             insight slot. The phone pushes a health-driven insight /
+             important-notification line over the Data Layer; the
+             receiver below caches it and refreshes this service. -->
+        <service
+            android:name=".complications.InsightComplicationService"
+            android:exported="true"
+            android:icon="@android:drawable/ic_btn_speak_now"
+            android:label="Mythara Insight"
+            android:permission="com.google.android.wearable.permission.BIND_COMPLICATION_PROVIDER">
+            <intent-filter>
+                <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />
             </intent-filter>
             <meta-data
-                android:name="com.google.android.wearable.watchface.preview"
-                android:resource="@drawable/watch_face_preview" />
+                android:name="android.support.wearable.complications.SUPPORTED_TYPES"
+                android:value="SHORT_TEXT,LONG_TEXT" />
+            <!-- 0 = no periodic polling; the Data Layer receiver drives
+                 updates the instant a fresh insight arrives. -->
             <meta-data
-                android:name="com.google.android.wearable.watchface.preview_circular"
-                android:resource="@drawable/watch_face_preview" />
-            <meta-data
-                android:name="com.google.android.wearable.watchface.wearableConfigurationAction"
-                android:value="" />
-            <meta-data
-                android:name="android.service.wallpaper"
-                android:resource="@xml/watch_face" />
+                android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"
+                android:value="0" />
         </service>
+
+        <!-- Phone-battery complication — the paired phone's battery
+             level, pushed from the phone and shown in the face's top
+             stat band next to the watch's own battery. -->
+        <service
+            android:name=".complications.PhoneBatteryComplicationService"
+            android:exported="true"
+            android:icon="@android:drawable/ic_lock_idle_low_battery"
+            android:label="Mythara Phone Battery"
+            android:permission="com.google.android.wearable.permission.BIND_COMPLICATION_PROVIDER">
+            <intent-filter>
+                <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />
+            </intent-filter>
+            <meta-data
+                android:name="android.support.wearable.complications.SUPPORTED_TYPES"
+                android:value="SHORT_TEXT" />
+            <meta-data
+                android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"
+                android:value="0" />
+        </service>
+
+        <!-- Reminder complication — the next upcoming reminder, pushed
+             from the phone, shown on the Mythara Tactical face. -->
+        <service
+            android:name=".complications.ReminderComplicationService"
+            android:exported="true"
+            android:icon="@android:drawable/ic_menu_recent_history"
+            android:label="Mythara Reminder"
+            android:permission="com.google.android.wearable.permission.BIND_COMPLICATION_PROVIDER">
+            <intent-filter>
+                <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />
+            </intent-filter>
+            <meta-data
+                android:name="android.support.wearable.complications.SUPPORTED_TYPES"
+                android:value="SHORT_TEXT,LONG_TEXT" />
+            <meta-data
+                android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"
+                android:value="0" />
+        </service>
+
+        <!-- Watch-side Data Layer receiver — phone-pushed agent messages
+             + phone battery (path prefix covers both /mythara/* paths). -->
+        <service
+            android:name=".MytharaWearDataReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
+                <data
+                    android:scheme="wear"
+                    android:host="*"
+                    android:pathPrefix="/mythara" />
+            </intent-filter>
+        </service>
+
+        <!-- Foreground service: samples the heart-rate sensor every
+             ~3 min and ships readings to the phone. -->
+        <service
+            android:name=".HeartRateService"
+            android:exported="false"
+            android:foregroundServiceType="health" />
     </application>
 </manifest>

@@ -12,6 +12,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.mythara.MainActivity
 import com.mythara.R
+import com.mythara.secret.observe.extract.gemma.GemmaExtractor
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -42,14 +43,18 @@ import javax.inject.Singleton
 @Singleton
 class ReplyNotification @Inject constructor(
     @ApplicationContext private val ctx: Context,
+    private val gemma: GemmaExtractor,
 ) {
 
     /**
      * Post the reply notification if Mythara is currently in
      * background. No-op when foregrounded — the chat surface is
      * already showing the answer.
+     *
+     * Suspends because the quick-reply chips are generated on-device
+     * by Gemma, contextual to this specific reply.
      */
-    fun postIfBackgrounded(replyText: String) {
+    suspend fun postIfBackgrounded(replyText: String) {
         if (replyText.isBlank()) return
         if (isAppForegrounded()) return
         createChannel()
@@ -78,9 +83,10 @@ class ReplyNotification @Inject constructor(
         val replyRemoteInput = RemoteInput.Builder(NotificationReplyReceiver.KEY_REPLY_TEXT)
             .setLabel("Reply to Lumi")
             .setAllowFreeFormInput(true)
-            // Suggest 3 quick chips that work both on watch + phone.
-            // Wear OS surfaces these as tap-to-send canned replies.
-            .setChoices(arrayOf("Got it", "Tell me more", "Not now"))
+            // Quick chips generated on-device by Gemma, contextual to
+            // *this* reply — not generic canned text. Wear OS surfaces
+            // them as tap-to-send replies on the watch notification.
+            .setChoices(generateQuickReplies(replyText))
             .build()
         val replyIntent = Intent(ctx, NotificationReplyReceiver::class.java).apply {
             action = NotificationReplyReceiver.ACTION_NOTIFICATION_REPLY
@@ -164,6 +170,38 @@ class ReplyNotification @Inject constructor(
     private fun isAppForegrounded(): Boolean {
         return ProcessLifecycleOwner.get().lifecycle.currentState
             .isAtLeast(Lifecycle.State.RESUMED)
+    }
+
+    /**
+     * Ask Gemma for 3-4 short, contextual reply chips for this
+     * specific message. Falls back to generic chips when Gemma isn't
+     * loaded yet or returns nothing usable.
+     */
+    private suspend fun generateQuickReplies(replyText: String): Array<CharSequence> {
+        val fallback = arrayOf<CharSequence>("Got it", "Tell me more", "Not now")
+        if (!gemma.isReady()) return fallback
+        val prompt = """You write quick-reply chips for a watch notification.
+The assistant just told the user:
+"${replyText.take(400)}"
+
+Suggest 3 to 4 VERY short replies (each at most 4 words) the user could tap to respond.
+Return ONLY a JSON array of strings — no prose, no markdown.
+Example: ["Sounds good","Tell me more","Not now","Cancel it"]"""
+        val raw = gemma.runRaw(prompt) ?: return fallback
+        val choices = parseChoices(raw)
+        return if (choices.isNotEmpty()) choices.toTypedArray() else fallback
+    }
+
+    /** Pull the first JSON string-array out of [raw]; trims + caps. */
+    private fun parseChoices(raw: String): List<CharSequence> {
+        val start = raw.indexOf('[')
+        val end = raw.indexOf(']', start + 1)
+        if (start < 0 || end <= start) return emptyList()
+        return raw.substring(start + 1, end)
+            .split(',')
+            .map { it.trim().trim('"', '\'', ' ') }
+            .filter { it.isNotBlank() && it.length <= 24 }
+            .take(4)
     }
 
     private fun createChannel() {

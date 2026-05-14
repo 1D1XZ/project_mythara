@@ -23,6 +23,9 @@ import com.mythara.persona.PersonaScheduler
 import com.mythara.persona.PersonaSettings
 import com.mythara.voice.QuickTalkNotification
 import com.mythara.voice.QuickTalkSettings
+import com.mythara.wear.WatchAgentMessageRelay
+import com.mythara.wear.WatchClusterDataPusher
+import com.mythara.wear.WatchPhoneStatusRelay
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -64,6 +67,9 @@ class MytharaApp : Application(), Configuration.Provider {
     @Inject lateinit var reminderAlarmScheduler: ReminderAlarmScheduler
     @Inject lateinit var healthLearningScheduler: HealthLearningScheduler
     @Inject lateinit var hrCorrelationScheduler: HrCorrelationScheduler
+    @Inject lateinit var watchAgentMessageRelay: WatchAgentMessageRelay
+    @Inject lateinit var watchPhoneStatusRelay: WatchPhoneStatusRelay
+    @Inject lateinit var watchClusterDataPusher: WatchClusterDataPusher
 
     // App-scoped supervisor for fire-and-forget process-level
     // coroutines (settings-flow observers etc.). Cancelled implicitly
@@ -148,6 +154,16 @@ class MytharaApp : Application(), Configuration.Provider {
         // correlate with HR spikes" becomes a learned relationship
         // signal that flavors auto-replies + persona insights.
         hrCorrelationScheduler.start()
+        // Watch-face agent-message relay — mirrors the latest Mythara
+        // agent chat message to the Tactical watch face's live line
+        // over the Data Layer, so the wrist stays in sync with the app.
+        watchAgentMessageRelay.start()
+        // Watch-face phone-status relay — publishes the phone's battery
+        // level to the watch (WFF can't read the peer device's battery).
+        watchPhoneStatusRelay.start()
+        // Watch companion data — pushes a snapshot of recent tasks +
+        // favorite people/insights to the watch app's Tasks/People lists.
+        watchClusterDataPusher.start()
         // Reflect the user's persistent-talk-notification preference
         // on every cold start (and follow live toggles while the
         // process is alive). Observing the Flow rather than reading

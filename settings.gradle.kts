@@ -24,3 +24,4 @@ dependencyResolutionManagement {
 rootProject.name = "Mythara"
 include(":app")
 include(":wear")
+include(":watchface")

@@ -4,6 +4,8 @@ import android.util.Log
 import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.WearableListenerService
 import com.mythara.agent.AgentRunner
+import com.mythara.memory.Tier
+import com.mythara.secret.observe.vault.LearningVault
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -31,6 +33,7 @@ import javax.inject.Inject
 class MytharaWearListenerService : WearableListenerService() {
 
     @Inject lateinit var runner: AgentRunner
+    @Inject lateinit var vault: LearningVault
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -53,6 +56,27 @@ class MytharaWearListenerService : WearableListenerService() {
                         .onFailure { Log.w(TAG, "agent submit failed: ${it.message}") }
                 }
             }
+            HEART_RATE_PATH -> {
+                val bpm = runCatching {
+                    String(event.data, Charsets.UTF_8).trim().toInt()
+                }.getOrNull()
+                if (bpm == null || bpm !in 30..240) {
+                    Log.d(TAG, "HR payload invalid; skipping")
+                    return
+                }
+                Log.d(TAG, "HR from watch: $bpm bpm")
+                scope.launch {
+                    runCatching {
+                        vault.add(
+                            content = "Heart rate $bpm bpm (captured on watch).",
+                            tier = Tier.Working,
+                            src = "watch:heart-rate",
+                            facets = listOf("kind:heart-rate", "topic:health", "source:watch"),
+                            conf = 0.95,
+                        )
+                    }.onFailure { Log.w(TAG, "HR vault write failed: ${it.message}") }
+                }
+            }
             else -> Log.d(TAG, "ignored message on ${event.path}")
         }
     }
@@ -60,5 +84,8 @@ class MytharaWearListenerService : WearableListenerService() {
     companion object {
         private const val TAG = "Mythara/WearListener"
         const val PTT_SUBMIT_PATH = "/mythara/ptt/submit"
+
+        /** Watch → phone: a single heart-rate reading (bpm). */
+        const val HEART_RATE_PATH = "/mythara/heart_rate"
     }
 }
