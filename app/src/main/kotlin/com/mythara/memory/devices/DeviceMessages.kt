@@ -112,6 +112,16 @@ object DeviceMessageKind {
     const val LOCATION_REQUEST = "location_request"
     const val LOCATION_RESPONSE = "location_response"
     const val PING = "ping"
+    /** User-initiated note / chat / idea handoff from device A → B.
+     *  Payload: {"title": "...", "body": "..."} — recipient surfaces it
+     *  in their chat scrollback as a FromOtherDevice card. */
+    const val CHAT_NOTE = "chat_note"
+    /** New task posted by device A — recipient(s) pick it up via the
+     *  task scheduler. Payload: TaskExport JSON. */
+    const val TASK_CREATED = "task_created"
+    /** Status update on an existing task (claimed / running / done /
+     *  failed). Payload: {"taskId":..., "status":..., "note":...}. */
+    const val TASK_UPDATE = "task_update"
 }
 
 object DeviceMessageStatus {

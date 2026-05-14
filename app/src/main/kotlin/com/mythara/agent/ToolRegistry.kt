@@ -71,6 +71,9 @@ class ToolRegistry @Inject constructor(
     readRecentChatImageTool: com.mythara.agent.tools.ReadRecentChatImageTool,
     requestRemoteLocationTool: com.mythara.agent.tools.RequestRemoteLocationTool,
     listMytharaDevicesTool: com.mythara.agent.tools.ListMytharaDevicesTool,
+    sendNoteToDeviceTool: com.mythara.agent.tools.SendNoteToDeviceTool,
+    createTaskTool: com.mythara.agent.tools.CreateTaskTool,
+    teamCallTool: com.mythara.agent.tools.TeamCallTool,
     private val gate: ConfirmationGate,
     private val allowlist: com.mythara.data.AllowlistStore,
     private val confirmationSettings: ConfirmationSettings,
@@ -102,6 +105,9 @@ class ToolRegistry @Inject constructor(
         readRecentChatImageTool,
         requestRemoteLocationTool,
         listMytharaDevicesTool,
+        sendNoteToDeviceTool,
+        createTaskTool,
+        teamCallTool,
     )
     private val byName: Map<String, Tool> = tools.associateBy { it.name }
 

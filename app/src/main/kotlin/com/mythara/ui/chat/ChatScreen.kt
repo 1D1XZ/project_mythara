@@ -49,8 +49,13 @@ import androidx.core.content.ContextCompat
 import com.mythara.mic.ContinuousSpeechRecognition
 import com.mythara.mic.MicBroker
 import com.mythara.mic.SpeechRecognition
+import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import com.mythara.ui.theme.Glyph
 import com.mythara.ui.theme.JetBrainsMono
@@ -89,6 +94,8 @@ fun ChatScreen(
     onOpenAppDrawer: (() -> Unit)? = null,
     /** Same pattern for the lifeline timeline grid. */
     onOpenTimeline: (() -> Unit)? = null,
+    /** Same pattern for the cross-device tasks screen. */
+    onOpenTasks: (() -> Unit)? = null,
     vm: ChatViewModel = hiltViewModel(),
 ) {
     val ui by vm.ui.collectAsState()
@@ -264,17 +271,19 @@ fun ChatScreen(
     ) {
         var appDrawerOpen by remember { mutableStateOf(false) }
         var timelineOpen by remember { mutableStateOf(false) }
+        var tasksOpen by remember { mutableStateOf(false) }
         // Two-pane mode hands us [onOpenAppDrawer] / [onOpenTimeline]
-        // so those surfaces land in the right pane (same surface as
-        // People/Settings). Single-pane leaves them null and we toggle
-        // local bottom sheets.
+        // / [onOpenTasks] so those surfaces land in the right pane.
+        // Single-pane leaves them null and we toggle local bottom sheets.
         val openDrawer: () -> Unit = onOpenAppDrawer ?: { appDrawerOpen = true }
         val openTimeline: () -> Unit = onOpenTimeline ?: { timelineOpen = true }
+        val openTasks: () -> Unit = onOpenTasks ?: { tasksOpen = true }
         ChatHeader(
             onOpenSettings = onOpenSettings,
             onOpenPeople = onOpenPeople,
             onOpenAppDrawer = openDrawer,
             onOpenTimeline = openTimeline,
+            onOpenTasks = openTasks,
             thinking = ui.thinking,
             continuousMode = ui.continuousMode,
             onToggleContinuous = { vm.setContinuousMode(!ui.continuousMode) },
@@ -285,6 +294,9 @@ fun ChatScreen(
         }
         if (timelineOpen && onOpenTimeline == null) {
             com.mythara.ui.lifeline.TimelineGridSheet(onDismiss = { timelineOpen = false })
+        }
+        if (tasksOpen && onOpenTasks == null) {
+            com.mythara.ui.tasks.TasksScreenSheet(onDismiss = { tasksOpen = false })
         }
 
         // Lifeline filter chip strip. Visible only when there ARE
@@ -359,6 +371,7 @@ private fun ChatHeader(
     onOpenPeople: () -> Unit,
     onOpenAppDrawer: () -> Unit,
     onOpenTimeline: () -> Unit,
+    onOpenTasks: () -> Unit,
     thinking: Boolean,
     continuousMode: Boolean,
     onToggleContinuous: () -> Unit,
@@ -452,6 +465,11 @@ private fun ChatHeader(
                     style = MaterialTheme.typography.labelMedium.copy(color = MytharaColors.Mustard),
                 )
             }
+            Spacer(Modifier.size(8.dp))
+            // Tasks pill — Malibu blue. Tap opens the cross-device
+            // task list. The count badge appears only when there are
+            // pending/claimed/running tasks anywhere in the cluster.
+            TasksPill(onClick = onOpenTasks)
             Spacer(Modifier.size(8.dp))
             Box(
                 modifier = Modifier
@@ -699,6 +717,44 @@ private fun LifelineFilterChips(
         FilterChip(label = "other devices", active = current == ChatViewModel.LifelineFilter.REMOTE) {
             onSelect(ChatViewModel.LifelineFilter.REMOTE)
         }
+    }
+}
+
+/**
+ * Tiny standalone ViewModel — just exposes the live pending-task
+ * count so the chat-header pill can show a badge without ChatViewModel
+ * needing to know about the tasks subsystem.
+ */
+@dagger.hilt.android.lifecycle.HiltViewModel
+class TasksPillViewModel @javax.inject.Inject constructor(
+    repo: com.mythara.tasks.TaskRepository,
+) : androidx.lifecycle.ViewModel() {
+    val pendingCount: StateFlow<Int> = repo.dao.pendingCountFlow()
+        .distinctUntilChanged()
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5_000L),
+            0,
+        )
+}
+
+@Composable
+private fun TasksPill(onClick: () -> Unit) {
+    val vm: TasksPillViewModel = hiltViewModel()
+    val pending by vm.pendingCount.collectAsState()
+    Box(
+        modifier = Modifier
+            .clip(CircleShape)
+            .background(MytharaColors.Surface)
+            .border(1.dp, MytharaColors.Malibu, CircleShape)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+    ) {
+        Text(
+            text = if (pending > 0) "${Glyph.DiamondFilled} tasks · $pending"
+            else "${Glyph.DiamondFilled} tasks",
+            style = MaterialTheme.typography.labelMedium.copy(color = MytharaColors.Malibu),
+        )
     }
 }
 

@@ -67,6 +67,8 @@ class MemorySync @Inject constructor(
     private val auditRepo: com.mythara.audit.AuditRepository,
     private val deviceMessageSync: com.mythara.memory.devices.DeviceMessageSync,
     private val lifelineRepo: com.mythara.lifeline.LifelineRepository,
+    private val taskRepo: com.mythara.tasks.TaskRepository,
+    @dagger.hilt.android.qualifiers.ApplicationContext private val ctx: android.content.Context,
 ) {
     data class Report(
         val ok: Boolean,
@@ -145,6 +147,8 @@ class MemorySync @Inject constructor(
         // inbox file) or its audit log shipped enough rows to surface
         // it on the other side — both are too lazy.
         val heartbeatPath = "device_messages/devices/$deviceId.json"
+        val installedAppsList = runCatching { queryInstalledLaunchablePackages() }
+            .getOrDefault(emptyList())
         val heartbeatBody = json.encodeToString(
             DevicePresence.serializer(),
             DevicePresence(
@@ -153,6 +157,7 @@ class MemorySync @Inject constructor(
                 manufacturer = android.os.Build.MANUFACTURER ?: "unknown",
                 androidSdk = android.os.Build.VERSION.SDK_INT,
                 lastSyncMs = now,
+                installedApps = installedAppsList,
             ),
         )
         // No putWithCache — heartbeats should rewrite every sync so the
@@ -418,6 +423,30 @@ class MemorySync @Inject constructor(
                 }
                 val syncedNow = System.currentTimeMillis()
                 lifelineRepo.dao.markSynced(unsyncedLifeline.map { it.id }, syncedNow)
+            }
+        }
+
+        // ---- tasks/<YYYY-MM>.jsonl — cross-device task queue. Each
+        //      row's state lives canonically on whichever device most
+        //      recently changed it; the (id, claimedBy, status,
+        //      completedMs) tuple lets restores reconcile races.
+        if (cfg.syncLearnings) {
+            val unsyncedTasks = runCatching { taskRepo.dao.listUnsynced() }.getOrDefault(emptyList())
+            if (unsyncedTasks.isNotEmpty()) {
+                val byMonth: Map<String, List<com.mythara.tasks.TaskEntity>> =
+                    unsyncedTasks.groupBy { isoYearMonth(it.createdMs) }
+                for ((month, rows) in byMonth) {
+                    val body = rows.joinToString("\n") { row ->
+                        json.encodeToString(TaskExport.serializer(), row.toExport())
+                    }
+                    val path = "tasks/$month.jsonl"
+                    putWithCache(
+                        client, cfg, path, body, manifest,
+                        "mythara: tasks/$month (+${rows.size})", written, skipped,
+                    )
+                }
+                val syncedNow = System.currentTimeMillis()
+                taskRepo.dao.markSynced(unsyncedTasks.map { it.id }, syncedNow)
             }
         }
 
@@ -723,6 +752,39 @@ class MemorySync @Inject constructor(
             }
         }
 
+        // tasks/<YYYY-MM>.jsonl — pull every month's task ledger and
+        // reconcile with local state. Conflict policy: the row with
+        // the latest *terminal* timestamp wins, else the latest claim,
+        // else the latest createdMs. Local edits that happened since
+        // the last sync win over older remote state.
+        runCatching {
+            client.listDirectory(cfg.owner, cfg.repo, "tasks")
+        }.getOrNull()?.let { listing ->
+            if (listing is Outcome.Ok) {
+                for (file in listing.value.filter { it.type == "file" && it.name.endsWith(".jsonl") }) {
+                    val read = runCatching {
+                        client.readFile(cfg.owner, cfg.repo, "tasks/${file.name}")
+                    }.getOrNull()
+                    if (read !is Outcome.Ok) continue
+                    val incoming = read.value.text.lineSequence()
+                        .filter { it.isNotBlank() }
+                        .mapNotNull {
+                            runCatching { json.decodeFromString(TaskExport.serializer(), it) }.getOrNull()
+                        }
+                        .toList()
+                    for (exp in incoming) {
+                        val existing = runCatching { taskRepo.dao.byId(exp.id) }.getOrNull()
+                        if (existing == null) {
+                            runCatching { taskRepo.dao.insertIfAbsent(exp.toRow().copy(syncedAtMs = System.currentTimeMillis())) }
+                        } else if (taskRemoteIsNewer(existing, exp)) {
+                            runCatching { taskRepo.dao.upsert(exp.toRow().copy(syncedAtMs = System.currentTimeMillis())) }
+                        }
+                    }
+                    if (incoming.isNotEmpty()) filesRead.add("tasks/${file.name}")
+                }
+            }
+        }
+
         memorySettings.setManifestJson(manifestJson.encodeToString(ManifestV2.serializer(), manifest))
         memorySettings.setLastSyncTs(manifest.lastSyncTsMillis)
 
@@ -998,6 +1060,28 @@ class MemorySync @Inject constructor(
     }
 
     /**
+     * Snapshot of every launchable package on this device. Used in
+     * the heartbeat write so peers know which apps each device can
+     * automate — the agent's planner can then route "open Uber" to
+     * the device with Uber installed rather than picking the wrong
+     * one. Capped at [DevicePresence.MAX_INSTALLED_APPS] entries.
+     */
+    private fun queryInstalledLaunchablePackages(): List<String> {
+        val pm = ctx.packageManager
+        val intent = android.content.Intent(android.content.Intent.ACTION_MAIN)
+            .addCategory(android.content.Intent.CATEGORY_LAUNCHER)
+        val infos = runCatching { pm.queryIntentActivities(intent, 0) }
+            .getOrDefault(emptyList())
+        val pkgs = LinkedHashSet<String>()
+        for (info in infos) {
+            val pkg = info.activityInfo?.applicationInfo?.packageName ?: continue
+            pkgs.add(pkg)
+            if (pkgs.size >= DevicePresence.MAX_INSTALLED_APPS) break
+        }
+        return pkgs.toList()
+    }
+
+    /**
      * `YYYY-MM` partition key for lifeline photos. Local time zone —
      * the user thinks of "January" in their own clock, not UTC.
      */
@@ -1044,7 +1128,24 @@ class MemorySync @Inject constructor(
         val manufacturer: String,
         val androidSdk: Int,
         val lastSyncMs: Long,
-    )
+        /**
+         * Package names of installed apps with launcher activities.
+         * Lets task scheduling and the agent's planning logic route
+         * work to the right device — "book an Uber" goes to the
+         * device that has Uber installed; "send a WhatsApp" goes to
+         * the device with WhatsApp.
+         *
+         * Capped at [MAX_INSTALLED_APPS] entries to keep heartbeat
+         * payloads bounded; on a normal device the count is well
+         * under 200, but apps with multiple launcher activities can
+         * inflate the raw count.
+         */
+        val installedApps: List<String> = emptyList(),
+    ) {
+        companion object {
+            const val MAX_INSTALLED_APPS = 400
+        }
+    }
 
     /**
      * One row in lifeline/<YYYY-MM>.jsonl. Metadata + caption only —
@@ -1053,6 +1154,30 @@ class MemorySync @Inject constructor(
      * the entry belongs to (UI shows "📷 phone-B" when the image is
      * not local to the current device).
      */
+    /**
+     * Cross-device task. Shipped to tasks/<YYYY-MM>.jsonl, partitioned
+     * by createdMs. Merging is last-writer-wins on (id, status) tuple
+     * — claims surface to everyone on the next heartbeat sync, so two
+     * devices grabbing the same null-target task at the same instant
+     * race to write their claim. The loser sees the winner's claim
+     * on the next pull and respects it.
+     */
+    @Serializable
+    data class TaskExport(
+        val id: String,
+        val title: String,
+        val body: String,
+        val req: String,            // requester device id
+        val tgt: String? = null,    // null = any
+        val st: String,             // TaskStatus.name
+        val claimedBy: String? = null,
+        val createdMs: Long,
+        val claimedMs: Long? = null,
+        val completedMs: Long? = null,
+        val result: String? = null,
+        val schedFor: Long? = null,
+    )
+
     @Serializable
     data class LifelineExport(
         val dev: String,
@@ -1343,6 +1468,64 @@ private fun com.mythara.analytics.ContactProfileRow.toExport(deviceId: String): 
         lastBuiltMs = lastBuiltMs,
         dev = deviceId,
     )
+
+/** Task DB row → sync wire shape. */
+internal fun com.mythara.tasks.TaskEntity.toExport(): MemorySync.TaskExport =
+    MemorySync.TaskExport(
+        id = id,
+        title = title,
+        body = body,
+        req = requesterDeviceId,
+        tgt = targetDeviceId,
+        st = status,
+        claimedBy = claimedByDeviceId,
+        createdMs = createdMs,
+        claimedMs = claimedMs,
+        completedMs = completedMs,
+        result = resultText,
+        schedFor = scheduledForMs,
+    )
+
+/** Wire shape → DB row. syncedAtMs left null so the next push re-uploads
+ *  iff there's a local-side change later. */
+internal fun MemorySync.TaskExport.toRow(): com.mythara.tasks.TaskEntity =
+    com.mythara.tasks.TaskEntity(
+        id = id,
+        title = title,
+        body = body,
+        requesterDeviceId = req,
+        targetDeviceId = tgt,
+        status = st,
+        claimedByDeviceId = claimedBy,
+        createdMs = createdMs,
+        claimedMs = claimedMs,
+        completedMs = completedMs,
+        resultText = result,
+        scheduledForMs = schedFor,
+    )
+
+/**
+ * Conflict policy. Terminal-state rows trump non-terminal (DONE/FAILED
+ * never re-opens). Otherwise the row with the later claim or createdMs
+ * wins.
+ */
+internal fun taskRemoteIsNewer(
+    local: com.mythara.tasks.TaskEntity,
+    remote: MemorySync.TaskExport,
+): Boolean {
+    val terminals = setOf(
+        com.mythara.tasks.TaskStatus.DONE.name,
+        com.mythara.tasks.TaskStatus.FAILED.name,
+        com.mythara.tasks.TaskStatus.CANCELED.name,
+    )
+    val localTerminal = local.status in terminals
+    val remoteTerminal = remote.st in terminals
+    if (localTerminal && !remoteTerminal) return false
+    if (!localTerminal && remoteTerminal) return true
+    val localStamp = local.completedMs ?: local.claimedMs ?: local.createdMs
+    val remoteStamp = remote.completedMs ?: remote.claimedMs ?: remote.createdMs
+    return remoteStamp > localStamp
+}
 
 /** Lifeline DB row → sync wire shape. */
 internal fun com.mythara.lifeline.LifelineEntity.toExport(): MemorySync.LifelineExport =

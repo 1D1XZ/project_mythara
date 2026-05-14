@@ -95,6 +95,12 @@ fun TwoPaneLayout(
                         launchSingleTop = true
                     }
                 },
+                onOpenTasks = {
+                    rightNav.navigate(RightPaneRoutes.Tasks) {
+                        popUpTo(RightPaneRoutes.Welcome) { inclusive = false }
+                        launchSingleTop = true
+                    }
+                },
             )
         }
 
@@ -179,6 +185,15 @@ fun TwoPaneLayout(
                         },
                     )
                 }
+                composable(RightPaneRoutes.Tasks) {
+                    com.mythara.ui.tasks.TasksScreenPane(
+                        onClose = {
+                            if (!rightNav.popBackStack()) {
+                                rightNav.navigate(RightPaneRoutes.Welcome) { launchSingleTop = true }
+                            }
+                        },
+                    )
+                }
             }
         }
     }
@@ -222,4 +237,5 @@ object RightPaneRoutes {
     const val SecretSettings = "rp_secret"
     const val AppDrawer = "rp_app_drawer"
     const val Timeline = "rp_timeline"
+    const val Tasks = "rp_tasks"
 }

@@ -36,6 +36,7 @@ class DeviceMessageHandler @Inject constructor(
     @ApplicationContext private val ctx: Context,
     private val repo: DeviceMessageRepository,
     private val deviceIdStore: DeviceIdStore,
+    private val history: com.mythara.data.HistoryRepository,
 ) {
     @Serializable
     data class LocationResponsePayload(
@@ -57,12 +58,47 @@ class DeviceMessageHandler @Inject constructor(
             DeviceMessageKind.LOCATION_REQUEST -> handleLocationRequest(msg)
             DeviceMessageKind.LOCATION_RESPONSE -> handleLocationResponse(msg)
             DeviceMessageKind.PING -> repo.dao.setStatus(msg.id, DeviceMessageStatus.HANDLED)
+            DeviceMessageKind.CHAT_NOTE -> handleChatNote(msg)
             else -> {
                 Log.w(TAG, "unknown message kind '${msg.kind}' — marking handled")
                 repo.dao.setStatus(msg.id, DeviceMessageStatus.HANDLED, "unknown kind")
             }
         }
     }
+
+    /**
+     * Pop an incoming chat note straight into the message history with
+     * the SENDER's deviceId set, so ChatViewModel.rebuildItems renders
+     * it as a FromOtherDevice card in the recipient's scrollback —
+     * same path already used for cross-device chat-history restore.
+     */
+    private suspend fun handleChatNote(msg: DeviceMessageEntity) {
+        val payload = runCatching {
+            json.decodeFromString(ChatNotePayload.serializer(), msg.payloadJson)
+        }.getOrNull() ?: ChatNotePayload(title = "(empty note)", body = "")
+        val display = buildString {
+            append("📝 ").append(payload.title)
+            if (payload.body.isNotBlank()) append("\n\n").append(payload.body)
+        }
+        runCatching {
+            history.dao.insert(
+                com.mythara.data.MessageRow(
+                    tsMillis = msg.tsMillis,
+                    role = "user",
+                    content = display,
+                    deviceId = msg.fromDevice,
+                ),
+            )
+        }
+        repo.dao.setStatus(msg.id, DeviceMessageStatus.HANDLED)
+        Log.d(TAG, "chat_note from ${msg.fromDevice}: '${payload.title.take(40)}'")
+    }
+
+    @Serializable
+    data class ChatNotePayload(
+        val title: String,
+        val body: String = "",
+    )
 
     private suspend fun handleLocationRequest(msg: DeviceMessageEntity) {
         val payload: LocationResponsePayload = runCatching {

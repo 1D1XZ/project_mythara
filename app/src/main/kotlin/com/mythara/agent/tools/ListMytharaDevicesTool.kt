@@ -174,6 +174,18 @@ class ListMytharaDevicesTool @Inject constructor(
                     put("manufacturer", hb.manufacturer)
                     put("android_sdk", hb.androidSdk)
                     put("last_sync_ms", hb.lastSyncMs)
+                    if (hb.installedApps.isNotEmpty()) {
+                        put(
+                            "installed_app_count",
+                            hb.installedApps.size,
+                        )
+                        // Full list — useful for planner heuristics
+                        // ("does this device have WhatsApp installed?").
+                        put(
+                            "installed_apps",
+                            buildJsonArray { hb.installedApps.forEach { add(JsonPrimitive(it)) } },
+                        )
+                    }
                 }
                 if (inInbox) put("inbox_size_bytes", inbox[id] ?: 0L)
                 if (inAudit) {

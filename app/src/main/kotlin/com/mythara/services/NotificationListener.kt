@@ -209,6 +209,23 @@ class NotificationListener : NotificationListenerService() {
             // event when bursts overrun the 16-slot buffer.
             _newNotifications.tryEmit(r)
         }
+        // Auto-dismiss promo / credit / OTP / engagement spam AFTER we've
+        // captured it for the agent's pipelines. The shade stays clean
+        // but the metadata still flowed into the audit log + queue.
+        if (PromoNotificationClassifier.shouldAutoDismiss(
+                packageName = r.packageName,
+                category = sbn.notification?.category,
+                title = title,
+                text = text,
+            )
+        ) {
+            runCatching { cancelNotification(sbn.key) }
+                .onFailure { Log.w(TAG, "promo dismiss cancel failed: ${it.message}") }
+            ioScope.launch {
+                runCatching { actionStore.bumpAutoDismissed(r.packageName, title, text) }
+            }
+            Log.d(TAG, "auto-dismissed promo notif from ${r.packageName}")
+        }
     }
 
     /** Snapshot the rolling buffer. Most-recent first. Ongoing
