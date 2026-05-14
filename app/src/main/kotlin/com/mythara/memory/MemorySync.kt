@@ -135,6 +135,38 @@ class MemorySync @Inject constructor(
         putWithCache(client, cfg, README_PATH, README_BODY, manifest,
             "mythara: seed README", written, skipped)
 
+        // Device heartbeat. Every sync writes (or refreshes)
+        // device_messages/devices/<myId>.json so the canonical "list of
+        // Mythara installs signed into this repo" can be derived by
+        // listing that directory. Without this, a brand-new device
+        // would be invisible to ListMytharaDevicesTool until either
+        // someone sent it a cross-device message (which creates the
+        // inbox file) or its audit log shipped enough rows to surface
+        // it on the other side — both are too lazy.
+        val heartbeatPath = "device_messages/devices/$deviceId.json"
+        val heartbeatBody = json.encodeToString(
+            DevicePresence.serializer(),
+            DevicePresence(
+                id = deviceId,
+                model = android.os.Build.MODEL ?: "unknown",
+                manufacturer = android.os.Build.MANUFACTURER ?: "unknown",
+                androidSdk = android.os.Build.VERSION.SDK_INT,
+                lastSyncMs = now,
+            ),
+        )
+        // No putWithCache — heartbeats should rewrite every sync so the
+        // lastSyncMs stays fresh. The cache skip would suppress that.
+        runCatching {
+            val existing = client.readFile(cfg.owner, cfg.repo, heartbeatPath)
+            val sha = if (existing is com.mythara.memory.github.GitHubClient.Outcome.Ok) existing.value.sha else null
+            client.writeFile(
+                owner = cfg.owner, repo = cfg.repo, path = heartbeatPath,
+                text = heartbeatBody,
+                commitMessage = "mythara: device heartbeat $deviceId",
+                branch = cfg.branch, previousSha = sha,
+            )
+        }.onFailure { Log.w(tag, "device heartbeat failed: ${it.message}") }
+
         // ---- working/<day>.jsonl  — current tier of raw learnings
         if (cfg.syncLearnings) {
             val entries = journal.read()
@@ -913,6 +945,22 @@ class MemorySync @Inject constructor(
 
     @Serializable
     data class SettingsExport(val region: String, val model: String)
+
+    /**
+     * Per-device heartbeat. Written to device_messages/devices/<id>.json
+     * on every sync so the canonical "list of Mythara installs signed
+     * into this repo" can be derived by enumerating that directory.
+     * lastSyncMs ages out a stale device by inspection — if it hasn't
+     * synced in weeks, the user knows it's dormant.
+     */
+    @Serializable
+    data class DevicePresence(
+        val id: String,
+        val model: String,
+        val manufacturer: String,
+        val androidSdk: Int,
+        val lastSyncMs: Long,
+    )
 
     /** Per-contact analytics row — one per line in
      *  analytics/contact_profiles.jsonl. Stable short-key field names

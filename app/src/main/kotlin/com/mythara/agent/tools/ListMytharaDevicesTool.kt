@@ -6,7 +6,9 @@ import com.mythara.agent.ToolResult
 import com.mythara.audit.AuditRepository
 import com.mythara.memory.DeviceIdStore
 import com.mythara.memory.MemorySettings
+import com.mythara.memory.MemorySync
 import com.mythara.memory.github.GitHubClient
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -79,63 +81,87 @@ class ListMytharaDevicesTool @Inject constructor(
     override suspend fun execute(args: JsonObject): ToolResult {
         val myId = runCatching { deviceIdStore.id() }.getOrElse { "unknown-device" }
 
-        // Source A: inbox directory listing from the memory repo.
         val cfg = memorySettings.snapshot()
         val configured = cfg.configured
-        val inbox: Map<String, Long> // device-id → file size in bytes
         var reachable = false
-        var inboxError: String? = null
+        var heartbeatError: String? = null
+        val heartbeats: MutableMap<String, MemorySync.DevicePresence> = mutableMapOf()
+        val inbox: MutableMap<String, Long> = mutableMapOf()
+
         if (!configured) {
-            inbox = emptyMap()
-            inboxError = "memory sync not configured (set PAT + repo in Settings → Memory sync)"
+            heartbeatError = "memory sync not configured (set PAT + repo in Settings → Memory sync)"
         } else {
             val client = GitHubClient(cfg.pat!!)
-            when (val r = client.listDirectory(cfg.owner, cfg.repo, "device_messages/inbox")) {
+
+            // Source A (canonical): device_messages/devices/ — one
+            // heartbeat JSON per Mythara install, refreshed on every
+            // sync. The directory listing IS the registry.
+            when (val r = client.listDirectory(cfg.owner, cfg.repo, "device_messages/devices")) {
                 is GitHubClient.Outcome.Ok -> {
                     reachable = true
-                    inbox = r.value
-                        .filter { it.type == "file" && it.name.endsWith(".jsonl") }
-                        .associate { it.name.removeSuffix(".jsonl") to it.size }
+                    val files = r.value.filter { it.type == "file" && it.name.endsWith(".json") }
+                    for (f in files) {
+                        val read = client.readFile(
+                            cfg.owner, cfg.repo, "device_messages/devices/${f.name}",
+                        )
+                        if (read is GitHubClient.Outcome.Ok) {
+                            runCatching {
+                                JSON.decodeFromString(MemorySync.DevicePresence.serializer(), read.value.text)
+                            }.onSuccess { heartbeats[it.id] = it }
+                                .onFailure { Log.w(TAG, "bad heartbeat ${f.name}: ${it.message}") }
+                        }
+                    }
                 }
                 is GitHubClient.Outcome.NotFound -> {
-                    reachable = true // repo IS reachable; just no inbox yet
-                    inbox = emptyMap()
-                    inboxError = "no device_messages/inbox/ in the repo yet — " +
-                        "this is the first device to sync, or no cross-device messages have been sent"
+                    reachable = true
+                    heartbeatError = "no device_messages/devices/ in the repo yet — " +
+                        "this device hasn't completed its first sync since the heartbeat " +
+                        "feature was added. Run memory sync now to register, then ask again."
                 }
-                is GitHubClient.Outcome.Unauthorized -> {
-                    inbox = emptyMap()
-                    inboxError = "GitHub auth failed — token may have expired or been revoked"
-                }
-                is GitHubClient.Outcome.Conflict -> {
-                    inbox = emptyMap()
-                    inboxError = "GitHub conflict: ${r.message}"
-                }
-                is GitHubClient.Outcome.Error -> {
-                    inbox = emptyMap()
-                    inboxError = "GitHub error ${r.httpStatus}: ${r.message}"
+                is GitHubClient.Outcome.Unauthorized ->
+                    heartbeatError = "GitHub auth failed — token may have expired or been revoked"
+                is GitHubClient.Outcome.Conflict ->
+                    heartbeatError = "GitHub conflict: ${r.message}"
+                is GitHubClient.Outcome.Error ->
+                    heartbeatError = "GitHub error ${r.httpStatus}: ${r.message}"
+            }
+
+            // Source B (legacy): inbox dir — any device that's ever
+            // received a cross-device message. Kept as a fallback for
+            // peers still on the pre-heartbeat APK.
+            if (reachable) {
+                when (val r = client.listDirectory(cfg.owner, cfg.repo, "device_messages/inbox")) {
+                    is GitHubClient.Outcome.Ok -> {
+                        for (f in r.value.filter { it.type == "file" && it.name.endsWith(".jsonl") }) {
+                            inbox[f.name.removeSuffix(".jsonl")] = f.size
+                        }
+                    }
+                    else -> { /* missing inbox is normal — first device hasn't received messages yet */ }
                 }
             }
         }
 
-        // Source B: audit-log distinct device ids on this device.
+        // Source C (local fallback): audit log distinct.
         val auditRows = runCatching { auditRepo.dao.listDistinctDevices() }
             .onFailure { Log.w(TAG, "audit distinct query failed: ${it.message}") }
             .getOrDefault(emptyList())
         val auditByDevice: Map<String, com.mythara.audit.DistinctDeviceRow> =
             auditRows.associateBy { it.deviceId }
 
-        // Union: every id seen in either source + always the local id.
+        // Union and emit one row per id seen anywhere.
         val allIds = buildSet {
             add(myId)
+            addAll(heartbeats.keys)
             addAll(inbox.keys)
             addAll(auditByDevice.keys)
         }
 
         val devices = allIds.map { id ->
+            val hb = heartbeats[id]
             val inInbox = id in inbox
             val inAudit = id in auditByDevice
             val source = listOfNotNull(
+                if (hb != null) "heartbeat" else null,
                 if (inInbox) "inbox" else null,
                 if (inAudit) "audit" else null,
             ).joinToString("+").ifEmpty { "self" }
@@ -143,21 +169,28 @@ class ListMytharaDevicesTool @Inject constructor(
                 put("id", id)
                 put("is_self", id == myId)
                 put("source", source)
+                if (hb != null) {
+                    put("model", hb.model)
+                    put("manufacturer", hb.manufacturer)
+                    put("android_sdk", hb.androidSdk)
+                    put("last_sync_ms", hb.lastSyncMs)
+                }
                 if (inInbox) put("inbox_size_bytes", inbox[id] ?: 0L)
                 if (inAudit) {
                     val row = auditByDevice[id]!!
                     put("audit_entries", row.entries)
-                    put("last_seen_ms", row.lastSeenMs)
+                    put("audit_last_seen_ms", row.lastSeenMs)
                 }
             }
-        }.sortedBy { (it["id"] as JsonPrimitive).content }
+        }.sortedWith(compareByDescending<JsonObject> { (it["is_self"] as JsonPrimitive).content == "true" }
+            .thenBy { (it["id"] as JsonPrimitive).content })
 
         val result = buildJsonObject {
             put("ok", true)
             put("this_device", myId)
             put("memory_sync_configured", configured)
             put("memory_sync_reachable", reachable)
-            if (inboxError != null) put("inbox_status", inboxError)
+            if (heartbeatError != null) put("registry_status", heartbeatError)
             put(
                 "devices",
                 buildJsonArray {
@@ -167,6 +200,8 @@ class ListMytharaDevicesTool @Inject constructor(
         }
         return ToolResult(true, result.toString())
     }
+
+    private val JSON = Json { ignoreUnknownKeys = true; isLenient = true }
 
     companion object {
         private const val TAG = "Mythara/ListDevices"

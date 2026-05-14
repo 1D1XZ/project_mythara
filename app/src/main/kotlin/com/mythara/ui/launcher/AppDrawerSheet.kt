@@ -93,8 +93,32 @@ data class DrawerApp(
 fun AppDrawerSheet(
     onDismiss: () -> Unit,
 ) {
-    val ctx = LocalContext.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MytharaColors.Bg,
+    ) {
+        AppDrawerBody(onLaunched = onDismiss)
+    }
+}
+
+/**
+ * Non-sheet variant. For the two-pane layout the drawer renders
+ * inline in the right pane (same surface People / Settings appear
+ * in), so we can't wrap it in a bottom sheet — the parent already
+ * provides the surface.
+ */
+@Composable
+fun AppDrawerPane(onClose: () -> Unit) {
+    AppDrawerBody(onLaunched = onClose)
+}
+
+@Composable
+private fun AppDrawerBody(
+    onLaunched: () -> Unit,
+) {
+    val ctx = LocalContext.current
     var apps by remember { mutableStateOf<List<DrawerApp>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var query by remember { mutableStateOf("") }
@@ -113,16 +137,12 @@ fun AppDrawerSheet(
         }
     }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = MytharaColors.Bg,
-    ) {
+    Box(modifier = Modifier.fillMaxSize().background(MytharaColors.Bg)) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(horizontal = 14.dp)
-                .padding(bottom = 20.dp),
+                .padding(top = 14.dp, bottom = 20.dp),
         ) {
             Text(
                 text = "${Glyph.DiamondFilled} apps",
@@ -175,7 +195,7 @@ fun AppDrawerSheet(
                                 app = app,
                                 onClick = {
                                     launchApp(ctx, app.pkg)
-                                    onDismiss()
+                                    onLaunched()
                                 },
                             )
                         }

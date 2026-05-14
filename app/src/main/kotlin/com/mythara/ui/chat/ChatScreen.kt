@@ -78,6 +78,15 @@ private const val SILENCE_TIMEOUT_MS = 5_000L
 fun ChatScreen(
     onOpenSettings: () -> Unit = {},
     onOpenPeople: () -> Unit = {},
+    /**
+     * When null (compact / single-pane), the chat-header drawer pill
+     * opens an in-screen ModalBottomSheet. When non-null (two-pane
+     * layout) the parent provides this callback to route to the
+     * right pane instead — so the drawer renders inline next to the
+     * chat, matching how People / Settings / About appear in that
+     * mode.
+     */
+    onOpenAppDrawer: (() -> Unit)? = null,
     vm: ChatViewModel = hiltViewModel(),
 ) {
     val ui by vm.ui.collectAsState()
@@ -252,16 +261,20 @@ fun ChatScreen(
             .padding(insets),
     ) {
         var appDrawerOpen by remember { mutableStateOf(false) }
+        // Two-pane mode hands us [onOpenAppDrawer] so the drawer lands
+        // in the right pane (same surface as People/Settings). Single-
+        // pane mode leaves it null and we toggle a local bottom sheet.
+        val openDrawer: () -> Unit = onOpenAppDrawer ?: { appDrawerOpen = true }
         ChatHeader(
             onOpenSettings = onOpenSettings,
             onOpenPeople = onOpenPeople,
-            onOpenAppDrawer = { appDrawerOpen = true },
+            onOpenAppDrawer = openDrawer,
             thinking = ui.thinking,
             continuousMode = ui.continuousMode,
             onToggleContinuous = { vm.setContinuousMode(!ui.continuousMode) },
         )
 
-        if (appDrawerOpen) {
+        if (appDrawerOpen && onOpenAppDrawer == null) {
             com.mythara.ui.launcher.AppDrawerSheet(onDismiss = { appDrawerOpen = false })
         }
 
