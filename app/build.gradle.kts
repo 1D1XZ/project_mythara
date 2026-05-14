@@ -155,6 +155,11 @@ dependencies {
     // the user's activity / sleep / heart patterns over time.
     implementation(libs.androidx.health.connect.client)
 
+    // Wearable Data Layer — phone-side receiver for the Wear OS
+    // companion app's push-to-talk transcripts. The Wear module
+    // (:wear) speaks the same client API to send messages back.
+    implementation(libs.play.services.wearable)
+
     // LiteRT-LM — on-device Gemma 4 E2B for M8.2.2 fact extraction. Replaces
     // MediaPipe Tasks-GenAI as Google's supported runtime path. Speaks the
     // `.litertlm` bundle format, auto-dispatches to GPU/NPU on supported

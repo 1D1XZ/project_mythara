@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Preview thumbnail shown in Wear OS's watch face picker. Static
+  vector mirroring the live face's brand: dark bg, big time-of-day
+  stroke, Charple wordmark stroke (gradient is for the live render),
+  dim date hint. ~280×280 viewport matches the canonical Wear OS
+  preview size.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="280dp"
+    android:height="280dp"
+    android:viewportWidth="280"
+    android:viewportHeight="280">
+
+    <!-- Bg -->
+    <path
+        android:pathData="M0,0 L280,0 L280,280 L0,280 Z"
+        android:fillColor="#201F26" />
+
+    <!-- HH:MM placeholder bar -->
+    <path
+        android:pathData="M70,148 L210,148"
+        android:strokeColor="#DFDBDD"
+        android:strokeWidth="46"
+        android:strokeLineCap="butt" />
+
+    <!-- MYTHARA wordmark stroke (flat Charple in the preview; the
+         live face renders the Charple→Bok linear gradient). -->
+    <path
+        android:pathData="M88,200 L192,200"
+        android:strokeColor="#6B50FF"
+        android:strokeWidth="11"
+        android:strokeLineCap="butt" />
+
+    <!-- Date placeholder bar -->
+    <path
+        android:pathData="M112,224 L168,224"
+        android:strokeColor="#605F6B"
+        android:strokeWidth="4"
+        android:strokeLineCap="butt" />
+</vector>
