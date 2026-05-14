@@ -392,5 +392,29 @@
              * NotificationListener (M5)
              * AgentForegroundService (M5+) -->
 
+        <!-- Disable the default androidx.startup WorkManagerInitializer.
+             Without this, WorkManager gets initialised with a DEFAULT
+             Configuration BEFORE MytharaApp.onCreate runs, which means
+             HiltWorkerFactory is never installed and every @HiltWorker
+             (MemorySyncWorker, GrowthWorker, HealthLearningWorker,
+             SensorLearningWorker, HrCorrelationWorker, LifelineWorker,
+             PendingReplyKickWorker, PersonaWorker) silently fails at
+             runtime with NoSuchMethodException because the default
+             factory reflects for a (Context, WorkerParameters)
+             constructor that @AssistedInject workers don't have.
+             MytharaApp implements Configuration.Provider so removing
+             this initializer lets the Hilt-provided factory take
+             effect. -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
+
     </application>
 </manifest>
