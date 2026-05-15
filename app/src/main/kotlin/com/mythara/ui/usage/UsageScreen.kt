@@ -17,7 +17,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -25,6 +28,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -43,22 +49,30 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import javax.inject.Inject
 
 /**
- * MiniMax API usage / quota screen. Hits the platform's
- * `coding_plan/remains` endpoint with the user's existing chat API
- * key, renders one card per model with:
+ * MiniMax API usage / quota screen.
  *
- *   - the current 4-hour interval's used / total + how long until
- *     the bucket refills
- *   - the rolling weekly bucket's used / total + how long until
- *     the weekly window resets
- *   - colour-coded usage bar (green when there's headroom, mustard
- *     when it's getting tight, red when fully consumed)
+ * Surfaces what the platform's `coding_plan/remains` endpoint
+ * reports — caps + usage per model, with both 4h-interval and
+ * weekly buckets. Important caveat surfaced explicitly in the
+ * header: this is the **Coding Plan** quota endpoint specifically;
+ * it doesn't necessarily match the token-plan dashboard at
+ * platform.minimax.io/user-center/payment/token-plan, which
+ * aggregates a different (token-based pay-as-you-go) usage
+ * surface even though the same Bearer key authenticates both.
  *
- * Refresh button at top kicks a fresh fetch — the API doesn't push,
- * so the screen would otherwise show whatever it loaded on enter.
+ * Diagnostic tools to help the user sanity-check vs Postman / the
+ * web dashboard:
+ *   - "fetched X ago" timestamp under the refresh button
+ *   - "raw json" button that opens the literal API response
+ *     body in a scrollable dialog so it's directly comparable
+ *     with what Postman returns
+ *   - cards lead with raw used/total counts; the % is secondary
  */
 @HiltViewModel
 class UsageViewModel @Inject constructor(
@@ -67,7 +81,11 @@ class UsageViewModel @Inject constructor(
 
     sealed interface Ui {
         data object Loading : Ui
-        data class Loaded(val rows: List<MiniMaxUsageClient.ModelRemaining>) : Ui
+        data class Loaded(
+            val rows: List<MiniMaxUsageClient.ModelRemaining>,
+            val rawBody: String,
+            val fetchedAtMs: Long,
+        ) : Ui
         data class Error(val message: String) : Ui
         data object NeedsApiKey : Ui
     }
@@ -81,7 +99,13 @@ class UsageViewModel @Inject constructor(
             val res = client.fetch()
             _ui.update {
                 res.fold(
-                    onSuccess = { Ui.Loaded(it.sortedBy { r -> r.modelName }) },
+                    onSuccess = { fetched ->
+                        Ui.Loaded(
+                            rows = fetched.rows.sortedBy { r -> r.modelName },
+                            rawBody = fetched.rawBody,
+                            fetchedAtMs = fetched.fetchedAtMs,
+                        )
+                    },
                     onFailure = { e ->
                         if (e is MiniMaxUsageClient.MissingApiKey) Ui.NeedsApiKey
                         else Ui.Error(e.message ?: "request failed")
@@ -98,6 +122,7 @@ fun UsageScreen(
     vm: UsageViewModel = hiltViewModel(),
 ) {
     val ui by vm.ui.collectAsState()
+    var rawDialogOpen by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { vm.refresh() }
 
@@ -117,8 +142,18 @@ fun UsageScreen(
             TextButton(onClick = onBack) {
                 Text("${Glyph.LeftArrow} back", color = MytharaColors.FgMute)
             }
-            TextButton(onClick = { vm.refresh() }) {
-                Text("refresh", color = MytharaColors.Bok)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (ui is UsageViewModel.Ui.Loaded) {
+                    TextButton(onClick = { rawDialogOpen = true }) {
+                        Text("raw json", color = MytharaColors.Charple)
+                    }
+                }
+                TextButton(onClick = { vm.refresh() }) {
+                    Text("refresh", color = MytharaColors.Bok)
+                }
             }
         }
         Column(modifier = Modifier.padding(horizontal = 16.dp)) {
@@ -130,10 +165,19 @@ fun UsageScreen(
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                text = "${Glyph.AccentBar} MiniMax API quota across every model — interval " +
-                    "(4h refill) and weekly buckets. Same key as chat, no separate setup.",
+                text = "${Glyph.AccentBar} MiniMax Coding Plan quota — interval (4h " +
+                    "refill) + weekly buckets per model. Different surface from the " +
+                    "token-plan dashboard, even though both use the same API key.",
                 style = MaterialTheme.typography.bodySmall.copy(color = MytharaColors.FgDim),
             )
+            (ui as? UsageViewModel.Ui.Loaded)?.let { state ->
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "fetched ${formatAge(state.fetchedAtMs)} ago",
+                    color = MytharaColors.FgMute,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
         }
 
         Spacer(Modifier.height(12.dp))
@@ -204,6 +248,36 @@ fun UsageScreen(
             }
         }
     }
+
+    if (rawDialogOpen) {
+        val state = ui as? UsageViewModel.Ui.Loaded
+        AlertDialog(
+            onDismissRequest = { rawDialogOpen = false },
+            title = { Text("raw API response", color = MytharaColors.Fg) },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                ) {
+                    Text(
+                        text = "GET ${MiniMaxUsageClient.USAGE_ENDPOINT}",
+                        color = MytharaColors.FgDim,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = state?.rawBody ?: "(no response)",
+                        color = MytharaColors.Fg,
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { rawDialogOpen = false }) {
+                    Text("close", color = MytharaColors.FgMute)
+                }
+            },
+        )
+    }
 }
 
 @Composable
@@ -220,31 +294,25 @@ private fun UsageCard(row: MiniMaxUsageClient.ModelRemaining) {
             .border(1.5.dp, accent, RoundedCornerShape(10.dp))
             .padding(12.dp),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = "${Glyph.DiamondFilled} ${row.modelName}",
-                color = accent,
-                style = MaterialTheme.typography.labelLarge,
-            )
-            Text(
-                text = "${(intervalPct * 100).toInt()}% / ${(weeklyPct * 100).toInt()}%",
-                color = MytharaColors.FgMute,
-                style = MaterialTheme.typography.labelMedium,
-            )
-        }
+        // Title row — model name + the two raw fractions side-by-
+        // side. % is shown but small so the actual numbers (which
+        // the user can compare directly with Postman) read first.
+        Text(
+            text = "${Glyph.DiamondFilled} ${row.modelName}",
+            color = accent,
+            style = MaterialTheme.typography.labelLarge,
+        )
         Spacer(Modifier.height(8.dp))
         UsageBar(
-            label = "interval (refills in ${formatDuration(row.remainsTime)})",
+            label = "interval",
+            sub = "refills in ${formatDuration(row.remainsTime)}",
             used = row.currentIntervalUsage,
             total = row.currentIntervalTotal,
         )
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(8.dp))
         UsageBar(
-            label = "weekly (refills in ${formatDuration(row.weeklyRemainsTime)})",
+            label = "weekly",
+            sub = "refills in ${formatDuration(row.weeklyRemainsTime)}",
             used = row.currentWeeklyUsage,
             total = row.currentWeeklyTotal,
         )
@@ -252,26 +320,43 @@ private fun UsageCard(row: MiniMaxUsageClient.ModelRemaining) {
 }
 
 @Composable
-private fun UsageBar(label: String, used: Long, total: Long) {
+private fun UsageBar(label: String, sub: String, used: Long, total: Long) {
     val frac = pct(used, total)
     val accent = colorForPct(frac)
     Column {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                text = label,
-                color = MytharaColors.FgDim,
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Text(
-                text = "$used / $total",
-                color = MytharaColors.FgMute,
-                style = MaterialTheme.typography.labelSmall,
-            )
+            Column {
+                Text(
+                    text = label,
+                    color = MytharaColors.Fg,
+                    style = MaterialTheme.typography.labelMedium,
+                )
+                Text(
+                    text = sub,
+                    color = MytharaColors.FgDim,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                // Lead with the raw counts since the user wants to
+                // diagnose against Postman. % is supplementary.
+                Text(
+                    text = "$used / $total",
+                    color = MytharaColors.Fg,
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                Text(
+                    text = "${(frac * 100).toInt()}%",
+                    color = accent,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
         }
-        Spacer(Modifier.height(2.dp))
+        Spacer(Modifier.height(4.dp))
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -305,9 +390,7 @@ private fun colorForPct(p: Float): Color = when {
     else -> MytharaColors.Bok
 }
 
-/** Format the `remains_time` value (seconds) as "Xh Ym" / "Xd Yh"
- *  — what the user actually wants to see is "how long until this
- *  refills", not raw seconds. */
+/** Format the `remains_time` value (seconds) as "Xh Ym" / "Xd Yh". */
 private fun formatDuration(seconds: Long): String {
     if (seconds <= 0) return "now"
     val s = seconds
@@ -319,5 +402,23 @@ private fun formatDuration(seconds: Long): String {
         h > 0 -> "${h}h ${m % 60}m"
         m > 0 -> "${m}m"
         else -> "${s}s"
+    }
+}
+
+/** "fetched X ago" — tells the user how stale the displayed cap
+ *  numbers are. The remote endpoint is request-driven (not push),
+ *  so a 5-minute-old fetch can show a different cap than what
+ *  Postman returns right now. */
+private fun formatAge(tsMs: Long): String {
+    val ageMs = System.currentTimeMillis() - tsMs
+    if (ageMs < 0) return "just now"
+    val s = ageMs / 1000
+    val m = s / 60
+    val h = m / 60
+    return when {
+        h > 0 -> "${h}h ${m % 60}m"
+        m > 0 -> "${m}m"
+        s > 5 -> "${s}s"
+        else -> "just now"
     }
 }

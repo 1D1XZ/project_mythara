@@ -92,14 +92,23 @@ class MiniMaxUsageClient @Inject constructor(
         explicitNulls = false
     }
 
-    /** Fetch the current usage breakdown. Returns:
-     *   - Result.success(list) on a 2xx with a non-empty payload
+    /** A single fetch + the raw body for diagnostic display. */
+    data class FetchResult(
+        val rows: List<ModelRemaining>,
+        val rawBody: String,
+        val fetchedAtMs: Long,
+    )
+
+    /** Fetch the current usage breakdown + the raw response body so
+     *  the screen can show "view raw JSON" for diagnostic comparison
+     *  against Postman / the platform plan dashboard. Returns:
+     *   - Result.success(FetchResult) on a 2xx with parseable payload
      *   - Result.failure(MissingApiKey) if the user hasn't set an
      *     API key yet
      *   - Result.failure(IOException / ApiException) on transport
      *     or HTTP-error states
      */
-    suspend fun fetch(): Result<List<ModelRemaining>> = withContext(Dispatchers.IO) {
+    suspend fun fetch(): Result<FetchResult> = withContext(Dispatchers.IO) {
         val key = settings.snapshot().apiKey
         if (key.isNullOrBlank()) {
             return@withContext Result.failure(MissingApiKey())
@@ -112,15 +121,19 @@ class MiniMaxUsageClient @Inject constructor(
                 .get()
                 .build()
             http.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) {
-                    error("HTTP ${resp.code} ${resp.message}")
-                }
                 val body = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) {
+                    error("HTTP ${resp.code} ${resp.message}\n$body")
+                }
                 val parsed = json.decodeFromString(RemainsResponse.serializer(), body)
                 if (parsed.baseResp.statusCode != 0) {
                     error("MiniMax ${parsed.baseResp.statusCode}: ${parsed.baseResp.statusMsg}")
                 }
-                parsed.modelRemains
+                FetchResult(
+                    rows = parsed.modelRemains,
+                    rawBody = body,
+                    fetchedAtMs = System.currentTimeMillis(),
+                )
             }
         }
     }
