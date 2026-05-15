@@ -50,6 +50,10 @@ class ChatViewModel @Inject constructor(
     private val lifelineRepo: com.mythara.lifeline.LifelineRepository,
     private val taskRepo: com.mythara.tasks.TaskRepository,
     private val auditRepo: com.mythara.audit.AuditRepository,
+    private val musicModeStore: com.mythara.data.MusicModeStore,
+    val musicVocabulary: com.mythara.music.MusicVocabulary,
+    private val musicEncoder: com.mythara.music.MusicReplyEncoder,
+    private val musicToneEngine: com.mythara.music.MusicToneEngine,
 ) : ViewModel() {
     /** Local device id, cached once on init. Used to identify
      *  foreign-device chat rows for the FromOtherDevice card render. */
@@ -97,6 +101,15 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             tts.speaking.collect { sp ->
                 _ui.update { it.copy(speaking = sp) }
+            }
+        }
+        // Music Mode — observe the toggle so the chat composer can
+        // render the current state and the Finished-turn handler can
+        // gate tone playback on it.
+        viewModelScope.launch {
+            musicModeStore.enabledFlow().collect { on ->
+                _ui.update { it.copy(musicMode = on) }
+                if (!on) musicToneEngine.stop()
             }
         }
         // Auto-process new phone notifications. Guarded by:
@@ -394,6 +407,10 @@ class ChatViewModel @Inject constructor(
          *  than this one — the filter chip strip is hidden when false
          *  (no point offering a filter that does nothing). */
         val hasRemoteLifeline: Boolean = false,
+        /** Music Mode — when true, each agent reply is encoded as a
+         *  sequence of tone motifs and played alongside the text.
+         *  Toggled from the chat composer next to the STT button. */
+        val musicMode: Boolean = false,
     )
 
     private val inflightTools = mutableMapOf<String, ChatItem.Tool>()
@@ -489,6 +506,21 @@ class ChatViewModel @Inject constructor(
                 // finishes speaking even if the user navigates away
                 // mid-utterance. We just clear the UI flags here.
                 _ui.update { it.copy(streaming = null, thinking = false) }
+                // Music Mode — encode the finished agent reply as a
+                // sequence of tone motifs and play. We run async so
+                // tone playback doesn't block the rest of the
+                // Finished handling; MusicToneEngine debounces back-
+                // to-back calls itself.
+                if (_ui.value.musicMode && turn.finalText.isNotBlank()) {
+                    viewModelScope.launch {
+                        runCatching {
+                            val motifs = musicEncoder.encode(turn.finalText)
+                                .map { it.motif }
+                                .filter { it.notes.isNotEmpty() }
+                            if (motifs.isNotEmpty()) musicToneEngine.play(motifs)
+                        }
+                    }
+                }
             }
             is AgentLoop.Turn.Error -> _ui.update {
                 it.copy(streaming = null, thinking = false, errorBanner = turn.message)
@@ -501,6 +533,42 @@ class ChatViewModel @Inject constructor(
 
     fun dismissError() = _ui.update { it.copy(errorBanner = null) }
     fun dismissMissingKey() = _ui.update { it.copy(needsApiKey = false) }
+
+    // ---- Music Mode --------------------------------------------------
+
+    fun setMusicMode(enabled: Boolean) {
+        viewModelScope.launch { musicModeStore.setEnabled(enabled) }
+    }
+
+    /** Replay the tone-encoded version of an assistant reply on demand
+     *  — the chat bubble's ▶ button. Encodes fresh each time so any
+     *  motif reshapes since the last play are reflected. */
+    fun replayMusic(text: String) {
+        if (text.isBlank()) return
+        viewModelScope.launch {
+            runCatching {
+                val motifs = musicEncoder.encode(text).map { it.motif }
+                    .filter { it.notes.isNotEmpty() }
+                if (motifs.isNotEmpty()) musicToneEngine.play(motifs)
+            }
+        }
+    }
+
+    /** Decode-tap feedback. Called when the user reveals an assistant
+     *  reply that was hidden in test-me mode: [gotIt] = true means
+     *  "I knew it" (a hit on every token's motif); false means "show
+     *  me" (a miss on every token's motif). The vocabulary's reshape
+     *  logic decides when consistent misses warrant a new pitch
+     *  pattern. */
+    fun musicReinforceReply(text: String, gotIt: Boolean) {
+        if (text.isBlank()) return
+        viewModelScope.launch {
+            runCatching {
+                val tokens = musicEncoder.encode(text).map { it.token }
+                tokens.forEach { tok -> musicVocabulary.reinforce(tok, hit = gotIt) }
+            }
+        }
+    }
 
     /**
      * Resolve a pending ConfirmationGate prompt. Called by

@@ -339,6 +339,9 @@ fun ChatScreen(
                     // Once streaming text shows, the indicator hides
                     // so the user reads the actual reply.
                     thinkingVisible = ui.thinking && ui.streaming.isNullOrEmpty(),
+                    musicMode = ui.musicMode,
+                    onReplayMusic = { text -> vm.replayMusic(text) },
+                    onReinforce = { text, gotIt -> vm.musicReinforceReply(text, gotIt) },
                 )
             }
 
@@ -367,6 +370,8 @@ fun ChatScreen(
             onDictationConsumed = { dictation = null },
             speechMuted = speechMuted,
             onToggleSpeechMute = { vm.micBroker.setMuted(!speechMuted) },
+            musicMode = ui.musicMode,
+            onToggleMusicMode = { vm.setMusicMode(!ui.musicMode) },
         )
         }
 
@@ -594,6 +599,9 @@ private fun Transcript(
     items: List<ChatViewModel.ChatItem>,
     streaming: String?,
     thinkingVisible: Boolean = false,
+    musicMode: Boolean = false,
+    onReplayMusic: (String) -> Unit = {},
+    onReinforce: (String, Boolean) -> Unit = { _, _ -> },
 ) {
     val listState = rememberLazyListState()
     val streamingActive = !streaming.isNullOrEmpty()
@@ -612,7 +620,13 @@ private fun Transcript(
         items(items, key = { it.key }) { item ->
             when (item) {
                 is ChatViewModel.ChatItem.UserText -> TextBubble(text = item.text, kind = item.kind)
-                is ChatViewModel.ChatItem.AssistantText -> TextBubble(text = item.text, kind = item.kind)
+                is ChatViewModel.ChatItem.AssistantText -> TextBubble(
+                    text = item.text,
+                    kind = item.kind,
+                    musicMode = musicMode && item.kind == ChatViewModel.TextKind.Reply,
+                    onReplayMusic = { onReplayMusic(item.text) },
+                    onReinforce = { gotIt -> onReinforce(item.text, gotIt) },
+                )
                 is ChatViewModel.ChatItem.Thought -> ThoughtBubble(item)
                 is ChatViewModel.ChatItem.Tool -> ToolCallBubble(item)
                 is ChatViewModel.ChatItem.FromOtherDevice -> FromOtherDeviceCard(item)
@@ -647,7 +661,16 @@ private fun Transcript(
  *  - Update       → Malibu frame + label (agent reacting to a notification)
  */
 @Composable
-private fun TextBubble(text: String, kind: ChatViewModel.TextKind) {
+private fun TextBubble(
+    text: String,
+    kind: ChatViewModel.TextKind,
+    /** When true, hide the body text behind a decode-tap pair of
+     *  "I got it" / "show me" buttons. Only ever true for assistant
+     *  Reply bubbles; user / notification / update bubbles ignore. */
+    musicMode: Boolean = false,
+    onReplayMusic: () -> Unit = {},
+    onReinforce: (Boolean) -> Unit = {},
+) {
     val isUser = kind == ChatViewModel.TextKind.User || kind == ChatViewModel.TextKind.Notification
     val accent = when (kind) {
         ChatViewModel.TextKind.User -> MytharaColors.Charple
@@ -676,6 +699,11 @@ private fun TextBubble(text: String, kind: ChatViewModel.TextKind) {
         text
     }
 
+    // Per-bubble reveal state for Music Mode. Keyed on the text so a
+    // reload or recomposition with a different message resets. Skipped
+    // entirely when not in music mode → bubble looks unchanged.
+    var revealed by remember(text) { mutableStateOf(!musicMode) }
+
     Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = align) {
         Text(
             text = "${Glyph.DiamondFilled} $label",
@@ -689,8 +717,67 @@ private fun TextBubble(text: String, kind: ChatViewModel.TextKind) {
                 .border(1.dp, border, RoundedCornerShape(10.dp))
                 .padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
-            Text(text = displayText, color = bodyColor, style = MaterialTheme.typography.bodyMedium)
+            if (musicMode && !revealed) {
+                // Decode-tap state — body is hidden behind a "test
+                // yourself" affordance. The tone phrase was already
+                // played when the message arrived; the user can
+                // replay, then choose how they did before revealing.
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = "♪ tone phrase · what did mythara say?",
+                        color = MytharaColors.FgDim,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        BubbleChip(
+                            label = "▶ replay",
+                            color = MytharaColors.SurfaceHigh,
+                        ) { onReplayMusic() }
+                        BubbleChip(
+                            label = "✓ got it",
+                            color = MytharaColors.Bok,
+                        ) {
+                            onReinforce(true)
+                            revealed = true
+                        }
+                        BubbleChip(
+                            label = "show me",
+                            color = MytharaColors.SurfaceHigh,
+                        ) {
+                            onReinforce(false)
+                            revealed = true
+                        }
+                    }
+                }
+            } else {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(text = displayText, color = bodyColor, style = MaterialTheme.typography.bodyMedium)
+                    if (musicMode) {
+                        Spacer(Modifier.height(6.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            BubbleChip(
+                                label = "▶ replay tones",
+                                color = MytharaColors.SurfaceHigh,
+                            ) { onReplayMusic() }
+                        }
+                    }
+                }
+            }
         }
+    }
+}
+
+@Composable
+private fun BubbleChip(label: String, color: androidx.compose.ui.graphics.Color, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(color)
+            .clickable { onClick() }
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+    ) {
+        Text(text = label, color = MytharaColors.Bg, style = MaterialTheme.typography.labelSmall)
     }
 }
 
@@ -711,6 +798,9 @@ private fun Composer(
     /** Global speech-to-text mute — disables the mic button entirely. */
     speechMuted: Boolean = false,
     onToggleSpeechMute: () -> Unit = {},
+    /** Music Mode toggle. When on, agent replies are tone-encoded. */
+    musicMode: Boolean = false,
+    onToggleMusicMode: () -> Unit = {},
 ) {
     var draft by remember { mutableStateOf("") }
     // Apply incoming dictation exactly once per (string, identity).
@@ -767,6 +857,30 @@ private fun Composer(
             onError = { /* surface later via VM event channel */ },
             muted = speechMuted,
         )
+
+        // Music Mode toggle — when on, every agent reply is also
+        // encoded as a sequence of tone motifs and played alongside
+        // the text. The same colours and 48dp footprint as the STT
+        // mute toggle so the composer row stays balanced.
+        Box(
+            modifier = Modifier
+                .size(48.dp)
+                .clip(RoundedCornerShape(24.dp))
+                .background(if (musicMode) MytharaColors.Charple else MytharaColors.Surface)
+                .border(
+                    2.dp,
+                    if (musicMode) MytharaColors.Charple else MytharaColors.SurfaceHigh,
+                    RoundedCornerShape(24.dp),
+                )
+                .clickable { onToggleMusicMode() },
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "♪",
+                color = if (musicMode) MytharaColors.Bg else MytharaColors.FgMute,
+                style = MaterialTheme.typography.titleMedium,
+            )
+        }
 
         Box(
             modifier = Modifier
