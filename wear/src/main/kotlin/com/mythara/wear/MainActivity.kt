@@ -461,6 +461,29 @@ private fun PttScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(text = "MYTHARA", color = PURPLE, fontSize = 14.sp, textAlign = TextAlign.Center)
+
+        // Live heart-rate badge — small ♥ + BPM beneath the wordmark.
+        // Reads from WatchHrStore (the same store the watch-face HR
+        // complication consumes) and re-polls once a second so a
+        // wrist-raise / activity change is reflected within the
+        // refresh window. "--" when no fresh sample (>3 min stale).
+        val hrBpm by androidx.compose.runtime.produceState(
+            initialValue = WatchHrStore.latestBpm(ctx).takeIf { WatchHrStore.isFresh(ctx) },
+            key1 = Unit,
+        ) {
+            while (true) {
+                value = WatchHrStore.latestBpm(ctx).takeIf { WatchHrStore.isFresh(ctx) }
+                kotlinx.coroutines.delay(1_000L)
+            }
+        }
+        Spacer(Modifier.height(2.dp))
+        Text(
+            text = "♥ ${hrBpm?.toString() ?: "--"}",
+            color = Color(0xFFEB4268),
+            fontSize = 12.sp,
+            textAlign = TextAlign.Center,
+        )
+
         // Weather + status + mic button only when NOT in a Resonance
         // session — eyes-free mode needs the vertical room for the
         // pad's 4 buttons + dots, and the mic tap is replaced by the

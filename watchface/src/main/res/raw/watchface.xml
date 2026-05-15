@@ -239,6 +239,35 @@
             <Complication type="EMPTY" />
         </ComplicationSlot>
 
+        <!-- Heart-rate complication — wearer's most recent BPM, fed by
+             the watch-side HeartRateService (which writes to
+             WatchHrStore on every Health Services sample). Sits in
+             the small gap between the top stat band and the world-
+             clock row, centred so it reads as the wearer's
+             physiological "now" alongside the temporal clocks
+             below. Hidden in ambient — battery-friendly + the AOD
+             time + MYTHARA wordmark are the only persistent pixels. -->
+        <ComplicationSlot slotId="6" x="160" y="84" width="130" height="22"
+            supportedTypes="SHORT_TEXT EMPTY">
+            <BoundingOval x="0" y="0" width="130" height="22" />
+            <DefaultProviderPolicy
+                primaryProvider="com.mythara.debug/com.mythara.wear.complications.HeartRateComplicationService"
+                primaryProviderType="SHORT_TEXT"
+                defaultSystemProvider="WATCH_BATTERY"
+                defaultSystemProviderType="SHORT_TEXT" />
+            <Complication type="SHORT_TEXT">
+                <PartText x="0" y="0" width="130" height="22">
+                    <Variant mode="AMBIENT" target="alpha" value="0" />
+                    <Text align="CENTER">
+                        <Font family="jetbrains_mono_regular" size="16" weight="BOLD" color="#ffeb4268">
+                            <Template><![CDATA[%s]]><Parameter expression="[COMPLICATION.TEXT]" /></Template>
+                        </Font>
+                    </Text>
+                </PartText>
+            </Complication>
+            <Complication type="EMPTY" />
+        </ComplicationSlot>
+
         <!-- ===== Three world clocks — laid out to match the map =====
              LA (amber) left · CHI (device-local, blue) centre with a
              glowing neon "now" dot · DEL (green) right. Hidden in ambient. -->

@@ -99,6 +99,11 @@ class HeartRateService : Service() {
             if (bpm in VALID_BPM) {
                 latestBpm = bpm
                 latestSampleCount++
+                // Persist for the in-app HR readout + the watch-face
+                // HeartRateComplicationService. Same store the
+                // PttScreen reads from, so the live BPM visible in
+                // the app matches the complication on the face.
+                WatchHrStore.save(this@HeartRateService, bpm)
                 if (latestSampleCount % 5 == 1) {
                     Log.d(TAG, "HR reading $bpm bpm (sample #$latestSampleCount)")
                 }

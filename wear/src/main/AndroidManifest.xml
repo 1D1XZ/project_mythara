@@ -125,6 +125,27 @@
                 android:value="0" />
         </service>
 
+        <!-- Heart-rate complication — wearer's most recent live BPM,
+             captured by HeartRateService and persisted in WatchHrStore.
+             Same store the in-app PttScreen reads from so face + app
+             stay in lock-step. Self-refreshes every minute. -->
+        <service
+            android:name=".complications.HeartRateComplicationService"
+            android:exported="true"
+            android:icon="@android:drawable/ic_btn_speak_now"
+            android:label="Mythara Heart Rate"
+            android:permission="com.google.android.wearable.permission.BIND_COMPLICATION_PROVIDER">
+            <intent-filter>
+                <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />
+            </intent-filter>
+            <meta-data
+                android:name="android.support.wearable.complications.SUPPORTED_TYPES"
+                android:value="SHORT_TEXT" />
+            <meta-data
+                android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"
+                android:value="60" />
+        </service>
+
         <!-- Reminder complication — the next upcoming reminder, pushed
              from the phone, shown on the Mythara Tactical face. -->
         <service
