@@ -75,9 +75,18 @@ class HeartRateService : Service(), SensorEventListener {
     // NOT sticky: a background auto-restart would hit the Android 12+
     // background-FGS-start ban and crash-loop. The activity re-starts
     // it from onResume() instead, which is a guaranteed-foreground point.
+    //
+    // The streaming state is a tri-state on the wire: extra absent →
+    // "just keep me alive, don't touch the mode" (used by the
+    // plain `start()` from MainActivity.onResume); extra present + true
+    // → start streaming; extra present + false → stop streaming.
+    // Without this, every onResume would kill an active Resonance HR
+    // stream because `start()` was overloaded with a default-false flag.
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val wantStreaming = intent?.getBooleanExtra(EXTRA_STREAMING, false) == true
-        if (wantStreaming) startStreamingInternal() else stopStreamingInternal()
+        if (intent?.hasExtra(EXTRA_STREAMING) == true) {
+            val wantStreaming = intent.getBooleanExtra(EXTRA_STREAMING, false)
+            if (wantStreaming) startStreamingInternal() else stopStreamingInternal()
+        }
         return START_NOT_STICKY
     }
 
@@ -199,8 +208,11 @@ class HeartRateService : Service(), SensorEventListener {
          *  mode for a Resonance session (1Hz push on RESONANCE_HR). */
         private const val EXTRA_STREAMING = "stream"
 
-        /** Start (or re-attach to) the slow 3-min HR push baseline. */
-        fun start(ctx: Context) = launchSelf(ctx, streaming = false)
+        /** Start (or re-attach to) the slow 3-min HR push baseline.
+         *  Does NOT touch the streaming mode — calling this from
+         *  `MainActivity.onResume` must not knock an active Resonance
+         *  HR stream back to the slow baseline. */
+        fun start(ctx: Context) = launchSelf(ctx, streaming = null)
 
         /** Bump the running service into fast-stream mode for the
          *  duration of a Resonance session. Idempotent. */
@@ -209,9 +221,9 @@ class HeartRateService : Service(), SensorEventListener {
         /** Drop fast-stream mode back to the slow baseline. */
         fun stopStreaming(ctx: Context) = launchSelf(ctx, streaming = false)
 
-        private fun launchSelf(ctx: Context, streaming: Boolean) {
+        private fun launchSelf(ctx: Context, streaming: Boolean?) {
             val intent = Intent(ctx, HeartRateService::class.java)
-                .putExtra(EXTRA_STREAMING, streaming)
+            if (streaming != null) intent.putExtra(EXTRA_STREAMING, streaming)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 ctx.startForegroundService(intent)
             } else {
