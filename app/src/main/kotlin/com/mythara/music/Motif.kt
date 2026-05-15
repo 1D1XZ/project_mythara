@@ -25,6 +25,13 @@ data class Motif(
     val hits: Int = 0,
     val misses: Int = 0,
     val generation: Int = 0,
+    /** When this motif was first minted (epoch ms). Used by
+     *  cross-device vocabulary sync to resolve simultaneous mints
+     *  of the same token: the earliest-minted motif wins, so all
+     *  devices converge on the same dictionary entry. Zero on
+     *  motifs minted before the sync feature existed — they're
+     *  treated as ancient and always win. */
+    val createdAt: Long = 0L,
 ) {
     /** 0 (always missed) ... 1 (always hit). Returns 0.5 before any
      *  signal has been collected so a brand-new motif isn't treated

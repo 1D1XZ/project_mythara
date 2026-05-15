@@ -10,6 +10,7 @@ import com.mythara.memory.github.GitHubClient.Outcome
 import com.mythara.minimax.Region
 import com.mythara.secret.observe.vault.LearningVault
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import java.text.SimpleDateFormat
 import java.time.ZoneId
@@ -68,6 +69,7 @@ class MemorySync @Inject constructor(
     private val deviceMessageSync: com.mythara.memory.devices.DeviceMessageSync,
     private val lifelineRepo: com.mythara.lifeline.LifelineRepository,
     private val taskRepo: com.mythara.tasks.TaskRepository,
+    private val musicVocabulary: com.mythara.music.MusicVocabulary,
     @dagger.hilt.android.qualifiers.ApplicationContext private val ctx: android.content.Context,
 ) {
     data class Report(
@@ -369,6 +371,26 @@ class MemorySync @Inject constructor(
             putWithCache(
                 client, cfg, "analytics/user_aliases.json", aliasBody, manifest,
                 "mythara: user aliases (${aliases.size})", written, skipped,
+            )
+
+            // analytics/music_vocab.json — shared Music Mode vocabulary
+            // across all Mythara devices. Every motif carries a
+            // createdAt timestamp so cross-device merges resolve
+            // simultaneous mints of the same token via first-mint-
+            // wins. Inter-device communication (task handoffs etc.)
+            // can play the shared tones knowing the recipient device
+            // owns the same dictionary entries.
+            val vocab = runCatching { musicVocabulary.snapshot() }.getOrDefault(emptyMap())
+            val vocabBody = manifestJson.encodeToString(
+                kotlinx.serialization.builtins.MapSerializer(
+                    String.serializer(),
+                    com.mythara.music.Motif.serializer(),
+                ),
+                vocab,
+            )
+            putWithCache(
+                client, cfg, "analytics/music_vocab.json", vocabBody, manifest,
+                "mythara: music vocab (${vocab.size})", written, skipped,
             )
 
             // analytics/audit_log.jsonl — every tool call / redirect /
@@ -687,6 +709,25 @@ class MemorySync @Inject constructor(
                 }
             }
         }.onFailure { Log.w(tag, "user-aliases pull failed: ${it.message}") }
+
+        // ---- analytics/music_vocab.json (first-mint-wins merge)
+        runCatching {
+            val r = client.readFile(cfg.owner, cfg.repo, "analytics/music_vocab.json")
+            if (r is Outcome.Ok) {
+                val incoming: Map<String, com.mythara.music.Motif> = runCatching {
+                    manifestJson.decodeFromString(
+                        kotlinx.serialization.builtins.MapSerializer(
+                            String.serializer(),
+                            com.mythara.music.Motif.serializer(),
+                        ),
+                        r.value.text,
+                    )
+                }.getOrNull() ?: emptyMap()
+                if (incoming.isNotEmpty()) {
+                    musicVocabulary.mergeFromRemote(incoming)
+                }
+            }
+        }.onFailure { Log.w(tag, "music-vocab pull failed: ${it.message}") }
 
         // ---- lifeline/<YYYY-MM>.jsonl (upsert peer rows, skip own device)
         runCatching {

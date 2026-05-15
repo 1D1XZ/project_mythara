@@ -26,6 +26,7 @@ import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -178,6 +179,7 @@ class MusicVocabulary @Inject constructor(
                     put("h", m.hits)
                     put("m", m.misses)
                     put("g", m.generation)
+                    if (m.createdAt > 0L) put("c", m.createdAt)
                 })
             }
         }
@@ -199,7 +201,8 @@ class MusicVocabulary @Inject constructor(
                     val h = obj["h"]?.jsonPrimitive?.int ?: 0
                     val m = obj["m"]?.jsonPrimitive?.int ?: 0
                     val g = obj["g"]?.jsonPrimitive?.int ?: 0
-                    if (notes.isNotEmpty()) cache[k] = Motif(notes, h, m, g)
+                    val c = obj["c"]?.jsonPrimitive?.longOrNull ?: 0L
+                    if (notes.isNotEmpty()) cache[k] = Motif(notes, h, m, g, c)
                 }.onFailure { Log.w(TAG, "skipping malformed vocab entry '$k': ${it.message}") }
             }
             // One-shot migrations on load:
@@ -272,6 +275,7 @@ class MusicVocabulary @Inject constructor(
             .filter { it.key != key }
             .map { motifSignature(it.value.notes) }
             .toSet()
+        val now = System.currentTimeMillis()
 
         for (tier in baseTier..MAX_NOTES_PER_MOTIF) {
             // Phonetic first attempt — only at gen 0; reshapes
@@ -279,7 +283,7 @@ class MusicVocabulary @Inject constructor(
             if (generation == 0) {
                 val phonetic = vowelDerivedNotes(key, tier)
                 if (phonetic != null && motifSignature(phonetic) !in existing) {
-                    return Motif(notes = phonetic, hits = 0, misses = 0, generation = 0)
+                    return Motif(notes = phonetic, hits = 0, misses = 0, generation = 0, createdAt = now)
                 }
             }
             val possible = pow9(tier)
@@ -288,7 +292,7 @@ class MusicVocabulary @Inject constructor(
                 val seed = stableHash("$key|$generation|$salt")
                 val notes = pickNotes(seed, tier)
                 if (motifSignature(notes) !in existing) {
-                    return Motif(notes = notes, hits = 0, misses = 0, generation = generation)
+                    return Motif(notes = notes, hits = 0, misses = 0, generation = generation, createdAt = now)
                 }
             }
         }
@@ -297,8 +301,84 @@ class MusicVocabulary @Inject constructor(
         val seed = stableHash("$key|$generation")
         return Motif(
             notes = pickNotes(seed, MAX_NOTES_PER_MOTIF),
-            hits = 0, misses = 0, generation = generation,
+            hits = 0, misses = 0, generation = generation, createdAt = now,
         )
+    }
+
+    /**
+     * Merge a remote vocabulary snapshot into the local one. Used by
+     * cross-device sync (MemorySync) so every Mythara device
+     * converges on the same dictionary — when device A and device B
+     * both mint a motif for the same token, the **earliest** mint
+     * wins, ensuring that any future device that hadn't seen the
+     * token yet picks up the canonical pattern instead of generating
+     * its own.
+     *
+     * Merge rules per token:
+     *   - In LOCAL only → no change.
+     *   - In REMOTE only → adopt remote.
+     *   - In BOTH → keep the one with the lower `createdAt`. Hit /
+     *     miss counts of the WINNER are kept; the loser's counts
+     *     are added to the winner so the user's learning signal
+     *     isn't lost across the merge.
+     *
+     * Persists immediately on completion (no debounce — sync is the
+     * rare path, persistence latency is acceptable).
+     */
+    suspend fun mergeFromRemote(remote: Map<String, Motif>) {
+        if (remote.isEmpty()) return
+        ensureLoaded()
+        cacheLock.withLock {
+            var changed = 0
+            for ((key, remoteMotif) in remote) {
+                if (remoteMotif.notes.isEmpty()) continue
+                val local = cache[key]
+                if (local == null) {
+                    cache[key] = remoteMotif
+                    changed++
+                    continue
+                }
+                val localStamp = if (local.createdAt > 0L) local.createdAt else Long.MAX_VALUE
+                val remoteStamp = if (remoteMotif.createdAt > 0L) remoteMotif.createdAt else Long.MAX_VALUE
+                if (remoteStamp < localStamp) {
+                    // Remote wins. Carry the local hit/miss counts
+                    // forward so the user's learning signal isn't
+                    // discarded by adopting the remote motif.
+                    cache[key] = remoteMotif.copy(
+                        hits = remoteMotif.hits + local.hits,
+                        misses = remoteMotif.misses + local.misses,
+                    )
+                    changed++
+                } else if (localStamp == remoteStamp && local != remoteMotif) {
+                    // Same timestamp but different motifs — pick the
+                    // one with the alphabetically-smaller signature
+                    // as a deterministic tiebreaker so all devices
+                    // converge identically.
+                    val localSig = motifSignature(local.notes)
+                    val remoteSig = motifSignature(remoteMotif.notes)
+                    if (remoteSig < localSig) {
+                        cache[key] = remoteMotif.copy(
+                            hits = remoteMotif.hits + local.hits,
+                            misses = remoteMotif.misses + local.misses,
+                        )
+                        changed++
+                    }
+                }
+                // Otherwise local wins — no change.
+            }
+            if (changed > 0) {
+                Log.d(TAG, "merged $changed motif(s) from remote vocabulary")
+                _vocab.value = cache.toMap()
+                persist()
+            }
+        }
+    }
+
+    /** Read-only snapshot of the current vocabulary (suspend-safe).
+     *  Used by MemorySync to serialize for upload. */
+    suspend fun snapshot(): Map<String, Motif> {
+        ensureLoaded()
+        return cacheLock.withLock { cache.toMap() }
     }
 
     /** Extract the [count] most-representative vowels from [key] and
