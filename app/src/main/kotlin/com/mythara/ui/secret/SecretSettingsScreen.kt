@@ -925,6 +925,25 @@ fun SecretSettingsScreen(
                     color = MytharaColors.FgDim,
                     style = MaterialTheme.typography.bodySmall,
                 )
+                // Live HR readout — the question "is the watch actually
+                // streaming HR" is the single most common diagnostic,
+                // so it gets its own line. Shows live bpm + recent avg
+                // + baseline; "live: --" while the watch warms up or
+                // when streaming hasn't started.
+                val live = state.resonanceLiveHrBpm?.toString() ?: "--"
+                val avg = state.resonanceLiveHrAvgBpm?.toString() ?: "--"
+                val base = state.resonanceBaselineBpm?.toString() ?: "--"
+                val sessionTag = if (state.resonanceSessionActive) "session: open" else "session: idle"
+                Text(
+                    text = "$sessionTag · HR live $live bpm · avg $avg · baseline $base",
+                    color = MytharaColors.FgDim,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Text(
+                    text = "vault HR rows (recent): ${state.resonanceHrRowCount}",
+                    color = MytharaColors.FgDim,
+                    style = MaterialTheme.typography.bodySmall,
+                )
                 Spacer(Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(

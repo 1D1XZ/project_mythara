@@ -28,9 +28,12 @@ import com.mythara.secret.observe.vosk.Language
 import com.mythara.secret.observe.vosk.VoskModelStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
@@ -94,6 +97,19 @@ class SecretSettingsViewModel @Inject constructor(
         val resonanceVolumeCapPercent: Int = ResonanceSettings.DEFAULT_VOLUME_CAP_PERCENT,
         val resonanceEngineState: ResonanceAudioEngine.State = ResonanceAudioEngine.State(),
         val resonanceLoopPhase: ResonanceLoop.Phase = ResonanceLoop.Phase.Idle,
+        /** True while a session is open (controller has a live session). */
+        val resonanceSessionActive: Boolean = false,
+        /** Most recent watch-streamed HR sample (bpm). Null until the
+         *  watch warms up and pushes its first sample — if this stays
+         *  null while a session is active, the watch isn't streaming. */
+        val resonanceLiveHrBpm: Int? = null,
+        /** Mean HR across the analyzer's window. */
+        val resonanceLiveHrAvgBpm: Int? = null,
+        /** Baseline HR the analyzer is comparing against. */
+        val resonanceBaselineBpm: Int? = null,
+        /** Count of `topic:resonance` HR rows visible in the latest
+         *  vault page — proof that flushes are landing in the vault. */
+        val resonanceHrRowCount: Int = 0,
     ) {
         val readyToStart: Boolean
             get() = micGranted && (!notifRequired || notifGranted) && modelState is VoskModelStore.State.Ready
@@ -207,7 +223,19 @@ class SecretSettingsViewModel @Inject constructor(
                         hasEmbedding = row.embedding != null,
                     )
                 }
-                _state.update { it.copy(recentLearnings = previews) }
+                // Count of resonance HR-stream rows visible in the
+                // recent vault page — proof that ResonanceHrStore is
+                // actually flushing batches every ~60 s.
+                val hrRowCount = previews.count { p ->
+                    p.src == "resonance:hr-stream" ||
+                        ("topic:resonance" in p.facets && "kind:heart-rate" in p.facets)
+                }
+                _state.update {
+                    it.copy(
+                        recentLearnings = previews,
+                        resonanceHrRowCount = hrRowCount,
+                    )
+                }
             }
         }
         // ---- Resonance Mode flows ----
@@ -234,6 +262,32 @@ class SecretSettingsViewModel @Inject constructor(
         viewModelScope.launch {
             resonanceLoop.phase.collect { p ->
                 _state.update { it.copy(resonanceLoopPhase = p) }
+            }
+        }
+        // Live HR readout — follows whichever ResonanceSession is
+        // currently open. flatMapLatest swaps to the new session's
+        // state flow when the controller opens one, and emits null
+        // when the session ends so the UI clears itself.
+        @OptIn(ExperimentalCoroutinesApi::class)
+        viewModelScope.launch {
+            resonanceController.session
+                .flatMapLatest { sess -> sess?.state ?: flowOf(null) }
+                .collect { snap ->
+                    _state.update {
+                        it.copy(
+                            resonanceSessionActive = snap != null ||
+                                resonanceController.session.value != null,
+                            resonanceLiveHrBpm = snap?.liveHrBpm,
+                            resonanceLiveHrAvgBpm = snap?.liveHrAvgBpm,
+                            resonanceBaselineBpm = snap?.baselineBpm,
+                        )
+                    }
+                }
+        }
+        @OptIn(ExperimentalCoroutinesApi::class)
+        viewModelScope.launch {
+            resonanceController.session.collect { sess ->
+                _state.update { it.copy(resonanceSessionActive = sess != null) }
             }
         }
         refreshPermission()

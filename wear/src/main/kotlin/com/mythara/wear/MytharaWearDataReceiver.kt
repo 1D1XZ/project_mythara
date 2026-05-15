@@ -115,13 +115,27 @@ class MytharaWearDataReceiver : WearableListenerService() {
                 // knows their toggle / End-Session combo landed.
                 val raw = runCatching { String(event.data, Charsets.UTF_8).trim() }.getOrNull()
                 Log.d(TAG, "resonance state from phone: $raw")
-                if (raw == "ended") {
-                    // Mirror the local flag so the pad collapses if the
-                    // phone ended the session for any reason (cap timer,
-                    // headphone removal, hard stop from the app, etc.),
-                    // and drop HR sampling back to the slow baseline.
-                    ResonanceStore.setActive(this, false)
-                    HeartRateService.stopStreaming(this)
+                when (raw) {
+                    "active" -> {
+                        // Phone-initiated start (e.g. the secret menu's
+                        // "start" button, or a Protocol combo): mirror
+                        // the active flag so the pad shows up, AND bump
+                        // HR sampling into fast-stream mode so the
+                        // analyzer / closed loop actually have data.
+                        // Without this, a phone-side session would run
+                        // with no HR — `liveHrBpm` would stay null.
+                        ResonanceStore.setActive(this, true)
+                        HeartRateService.startStreaming(this)
+                    }
+                    "ended" -> {
+                        // Mirror the local flag so the pad collapses if
+                        // the phone ended the session for any reason
+                        // (cap timer, headphone removal, hard stop from
+                        // the app, etc.), and drop HR sampling back to
+                        // the slow baseline.
+                        ResonanceStore.setActive(this, false)
+                        HeartRateService.stopStreaming(this)
+                    }
                 }
                 buzz()
             }
