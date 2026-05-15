@@ -33,6 +33,11 @@ vosk = "0.3.47"
 jna = "5.13.0"
 mediapipeText = "0.10.14"
 healthConnect = "1.1.0-alpha07"
+# Wear OS Health Services — modern, Galaxy-Watch-compatible HR API.
+# Legacy SensorManager.TYPE_HEART_RATE is silent on most Samsung
+# watches; HealthServices.getClient(...).measureClient is the
+# supported path.
+healthServices = "1.0.0-rc02"
 playServicesWearable = "19.0.0"
 wearCompose = "1.4.1"
 wearWatchFace = "1.2.1"
@@ -119,6 +124,7 @@ hilt-work-compiler = { group = "androidx.hilt", name = "hilt-compiler", version.
 # 100-dim float vectors, 6MB model (lazy-downloaded, not bundled).
 mediapipe-tasks-text = { group = "com.google.mediapipe", name = "tasks-text", version.ref = "mediapipeText" }
 androidx-health-connect-client = { group = "androidx.health.connect", name = "connect-client", version.ref = "healthConnect" }
+androidx-health-services-client = { group = "androidx.health", name = "health-services-client", version.ref = "healthServices" }
 
 # Wear OS — used by the :wear module + the phone-side WearableListenerService.
 play-services-wearable = { group = "com.google.android.gms", name = "play-services-wearable", version.ref = "playServicesWearable" }

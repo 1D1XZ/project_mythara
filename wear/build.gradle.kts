@@ -59,5 +59,9 @@ dependencies {
     implementation(libs.androidx.wear.watchface)
     implementation(libs.androidx.wear.watchface.complications.data.source)
     implementation(libs.play.services.wearable)
+    // Wear OS Health Services — the supported HR API for Galaxy Watch.
+    // Replaces our legacy SensorManager.TYPE_HEART_RATE path which
+    // never fires onSensorChanged on most Samsung watches.
+    implementation(libs.androidx.health.services.client)
     debugImplementation(libs.androidx.ui.tooling)
 }

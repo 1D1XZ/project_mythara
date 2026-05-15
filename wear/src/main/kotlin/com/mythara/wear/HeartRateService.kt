@@ -6,13 +6,18 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.hardware.Sensor
-import android.hardware.SensorEvent
-import android.hardware.SensorEventListener
-import android.hardware.SensorManager
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import androidx.health.services.client.HealthServices
+import androidx.health.services.client.MeasureCallback
+import androidx.health.services.client.MeasureClient
+import androidx.health.services.client.data.Availability
+import androidx.health.services.client.data.DataPointContainer
+import androidx.health.services.client.data.DataType
+import androidx.health.services.client.data.DataTypeAvailability
+import androidx.health.services.client.data.DeltaDataType
+import androidx.health.services.client.data.SampleDataPoint
 import com.google.android.gms.wearable.Wearable
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -24,44 +29,89 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
- * Foreground service that samples the watch's heart-rate sensor and
- * pushes the latest reading to the phone every ~3 minutes over the
- * Wearable Data Layer ([WearPaths.HEART_RATE]).
+ * Foreground service that samples the watch's heart-rate sensor via the
+ * Wear OS [androidx.health.services.client.HealthServices] API and pushes:
  *
- * The phone files each reading into the health memory pipeline so the
- * "About Me" analytics can use it alongside the rest of the Health
- * Connect data. Runs foreground (minimal ongoing notification) so
- * sampling continues while the watch app isn't on screen — the point
- * is regular, spaced-out capture, not just app-session capture.
+ *  - the latest reading to the phone every ~3 minutes over
+ *    [WearPaths.HEART_RATE] (slow baseline; fed into the phone's
+ *    "About Me" analytics alongside the rest of Health Connect),
+ *  - and, while a Resonance Mode session is active, the latest reading
+ *    every ~1 s over [WearPaths.RESONANCE_HR] (fast stream; fed into
+ *    the phone's `ResonanceHrStore` for the analyzer + closed loop).
+ *
+ * **Why Health Services and not SensorManager?** The legacy
+ * `SensorManager.TYPE_HEART_RATE` path silently fires nothing on most
+ * Samsung Galaxy Watches — `BODY_SENSORS` is granted, the sensor
+ * exists, registration succeeds, and `onSensorChanged` is just never
+ * called. The supported, Galaxy-Watch-compatible API is Wear OS Health
+ * Services' [MeasureClient.registerMeasureCallback], which delivers
+ * HR points through [MeasureCallback.onDataReceived] and is also the
+ * API the system's HR complications use.
+ *
+ * Runs foreground (minimal ongoing notification) so sampling continues
+ * while the watch app isn't on screen — the point is regular, spaced
+ * capture, not just app-session capture.
  */
-class HeartRateService : Service(), SensorEventListener {
+class HeartRateService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private var sensorManager: SensorManager? = null
 
-    /** Most recent valid bpm reading, or -1 until the sensor warms up. */
+    /** Most recent valid bpm reading from Health Services, or -1 until
+     *  the watch's sensor has produced its first sample. */
     @Volatile private var latestBpm: Int = -1
 
-    /** Current sensor sample rate. Slow by default; the Resonance
-     *  fast-stream mode bumps it up while a session is active. */
-    @Volatile private var currentRate: Int = SensorManager.SENSOR_DELAY_NORMAL
+    /** Health Services measure-client — owns the HR subscription. */
+    private var measureClient: MeasureClient? = null
+
+    /** True while [measureCallback] is registered with [measureClient].
+     *  Used to keep `register` / `unregister` calls balanced. */
+    @Volatile private var measureRegistered: Boolean = false
+
+    /** True while the Resonance fast-stream push loop is running. */
+    @Volatile private var streaming: Boolean = false
 
     /** Fast push job — set while streaming, cancelled when streaming
      *  stops. The slow [PUSH_INTERVAL_MS] loop in onCreate keeps
      *  running independently. */
     private var streamJob: Job? = null
 
+    /** The Health Services callback. We keep it as a single instance so
+     *  unregister knows which subscription to drop. */
+    private val measureCallback = object : MeasureCallback {
+        override fun onAvailabilityChanged(
+            dataType: DeltaDataType<*, *>,
+            availability: Availability,
+        ) {
+            // Galaxy Watch sometimes flips ACQUIRING → AVAILABLE only
+            // after the user's wrist makes good contact. Logging this
+            // makes "no readings yet" debuggable instead of silent.
+            val s = (availability as? DataTypeAvailability)?.name ?: availability.toString()
+            Log.d(TAG, "HR availability: $s")
+        }
+
+        override fun onDataReceived(data: DataPointContainer) {
+            val points = data.getData(DataType.HEART_RATE_BPM)
+            // We only care about the freshest sample; the API may
+            // batch a few in one delivery.
+            val freshest = points.maxByOrNull { it.timeDurationFromBoot.toMillis() }
+                ?: return
+            val bpm = freshest.value.toInt()
+            if (bpm in VALID_BPM) {
+                latestBpm = bpm
+                latestSampleCount++
+                if (latestSampleCount % 5 == 1) {
+                    Log.d(TAG, "HR reading $bpm bpm (sample #$latestSampleCount)")
+                }
+            }
+        }
+    }
+    @Volatile private var latestSampleCount: Int = 0
+
     override fun onCreate() {
         super.onCreate()
         startForeground(NOTIF_ID, buildNotification())
-        sensorManager = (getSystemService(Context.SENSOR_SERVICE) as? SensorManager)?.also { sm ->
-            val hr = sm.getDefaultSensor(Sensor.TYPE_HEART_RATE)
-            if (hr != null) {
-                sm.registerListener(this, hr, currentRate)
-            } else {
-                Log.w(TAG, "no heart-rate sensor on this device")
-            }
-        }
+        measureClient = HealthServices.getClient(this).measureClient
+        registerHrSubscriptionInternal()
         // Push the latest reading on a slow timer — spaced capture, not
         // a firehose of every sensor sample.
         scope.launch {
@@ -91,22 +141,60 @@ class HeartRateService : Service(), SensorEventListener {
     }
 
     /**
-     * Bump sensor sample rate to [SensorManager.SENSOR_DELAY_UI] (~16ms)
-     * and start a 1Hz push of the latest reading over
-     * [WearPaths.RESONANCE_HR]. Idempotent. The slow 3-minute push on
-     * [WearPaths.HEART_RATE] keeps running underneath.
+     * Register the Health Services HR callback. Idempotent. The
+     * subscription stays active for the lifetime of the service —
+     * Health Services itself manages the underlying sensor's
+     * duty-cycle, so leaving it on is fine for battery on Wear OS.
+     */
+    private fun registerHrSubscriptionInternal() {
+        if (measureRegistered) return
+        val client = measureClient ?: run {
+            Log.w(TAG, "no Health Services MeasureClient; HR unavailable")
+            return
+        }
+        runCatching {
+            client.registerMeasureCallback(DataType.HEART_RATE_BPM, measureCallback)
+        }.onSuccess {
+            measureRegistered = true
+            Log.d(TAG, "Health Services HR subscription registered")
+        }.onFailure {
+            Log.w(TAG, "Health Services HR registration failed: ${it.message}")
+        }
+    }
+
+    private fun unregisterHrSubscriptionInternal() {
+        if (!measureRegistered) return
+        // Note: we deliberately do NOT call
+        // `MeasureClient.unregisterMeasureCallbackAsync` here — its
+        // return type is `ListenableFuture` which would drag in a
+        // guava (or concurrent-futures) dep just for an unregister
+        // we only need on process tear-down. Health Services drops
+        // the subscription automatically when the registering
+        // process dies; the foreground service is the only thing
+        // holding it alive, and it stops with the process.
+        measureRegistered = false
+        Log.d(TAG, "Health Services HR subscription will drop with service")
+    }
+
+    /**
+     * Start the Resonance fast-stream push loop. Idempotent. Health
+     * Services delivers HR samples on its own schedule (~1 Hz on
+     * recent Galaxy Watches); the loop just samples [latestBpm] and
+     * pushes it over [WearPaths.RESONANCE_HR].
      */
     private fun startStreamingInternal() {
         if (streamJob?.isActive == true) {
             Log.d(TAG, "streaming already active; skipping")
             return
         }
+        // Defensive: re-register in case the subscription was dropped
+        // for any reason (Health Services unavailable at boot, etc.).
+        registerHrSubscriptionInternal()
         streamPushCount = 0
         lastNoReadingLogMs = 0L
         lastNoNodesLogMs = 0L
-        applySensorRate(SensorManager.SENSOR_DELAY_UI)
-        val sensor = sensorManager?.getDefaultSensor(Sensor.TYPE_HEART_RATE)
-        Log.d(TAG, "resonance HR stream starting (sensor=${sensor?.name ?: "NONE"}, latestBpm=$latestBpm)")
+        streaming = true
+        Log.d(TAG, "resonance HR stream starting (latestBpm=$latestBpm, registered=$measureRegistered)")
         streamJob = scope.launch {
             while (isActive) {
                 delay(STREAM_INTERVAL_MS)
@@ -115,22 +203,14 @@ class HeartRateService : Service(), SensorEventListener {
         }
     }
 
-    /** Drop sample rate back to NORMAL and stop the fast push loop. */
+    /** Stop the fast push loop. Leaves the HR subscription active so
+     *  the slow 3-min push keeps working. */
     private fun stopStreamingInternal() {
         if (streamJob?.isActive != true) return
         Log.d(TAG, "resonance HR stream stopping")
         streamJob?.cancel()
         streamJob = null
-        applySensorRate(SensorManager.SENSOR_DELAY_NORMAL)
-    }
-
-    private fun applySensorRate(target: Int) {
-        if (target == currentRate) return
-        val sm = sensorManager ?: return
-        val hr = sm.getDefaultSensor(Sensor.TYPE_HEART_RATE) ?: return
-        runCatching { sm.unregisterListener(this) }
-        sm.registerListener(this, hr, target)
-        currentRate = target
+        streaming = false
     }
 
     private fun pushStreamSample() {
@@ -140,7 +220,7 @@ class HeartRateService : Service(), SensorEventListener {
             // is debuggable instead of silent.
             val now = System.currentTimeMillis()
             if (now - lastNoReadingLogMs > 5_000L) {
-                Log.d(TAG, "stream tick — no valid HR yet (latest=$bpm)")
+                Log.d(TAG, "stream tick — no valid HR yet (latest=$bpm, registered=$measureRegistered)")
                 lastNoReadingLogMs = now
             }
             return
@@ -170,13 +250,6 @@ class HeartRateService : Service(), SensorEventListener {
     @Volatile private var streamPushCount = 0
     @Volatile private var lastNoReadingLogMs = 0L
     @Volatile private var lastNoNodesLogMs = 0L
-
-    override fun onSensorChanged(event: SensorEvent?) {
-        val bpm = event?.values?.firstOrNull()?.toInt() ?: return
-        if (bpm in VALID_BPM) latestBpm = bpm
-    }
-
-    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
     private fun pushLatest() {
         val bpm = latestBpm
@@ -218,7 +291,7 @@ class HeartRateService : Service(), SensorEventListener {
 
     override fun onDestroy() {
         super.onDestroy()
-        runCatching { sensorManager?.unregisterListener(this) }
+        unregisterHrSubscriptionInternal()
         scope.cancel()
     }
 
