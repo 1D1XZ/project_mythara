@@ -72,7 +72,12 @@ class ScheduleAgentTaskTool @Inject constructor(
             "that fires a notification + TTS, this one just runs the prompt. " +
             "Granularity is ~5 minutes (heartbeat tick); use create_reminder for exact-second timing. " +
             "Provide at_epoch_ms for one-shot OR recurrence for recurring (syntax: " + Recurrence.SYNTAX + "). " +
-            "When recurrence is set, the first fire is computed from the recurrence and at_epoch_ms is ignored."
+            "When recurrence is set, the first fire is computed from the recurrence and at_epoch_ms is ignored. " +
+            "IMPORTANT: in your CHAT REPLY confirming a schedule, do NOT say 'in N minutes' or any relative " +
+            "time — the chat is a permanent log and that text freezes at creation, which becomes wrong as " +
+            "time passes. Use the absolute clock time only ('at 14:30', 'tomorrow at 9am') OR just point the " +
+            "user at the reminder card / watch face which both show a live countdown that ticks down on " +
+            "screen automatically."
 
     override val parameters: JsonObject = buildJsonObject {
         put("type", "object")

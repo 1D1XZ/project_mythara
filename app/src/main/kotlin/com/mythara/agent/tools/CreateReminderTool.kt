@@ -68,7 +68,12 @@ class CreateReminderTool @Inject constructor(
             "waking hours so it won't clash with a meeting. " +
             "For RECURRING reminders ('every day at 9am', 'every Mon/Wed/Fri at 6:30pm', 'every 2 hours') pass " +
             "`recurrence` — syntax: " + Recurrence.SYNTAX + ". When recurrence is set it also picks the FIRST fire " +
-            "time, so at_epoch_ms is ignored; the reminder then re-arms itself after every fire."
+            "time, so at_epoch_ms is ignored; the reminder then re-arms itself after every fire. " +
+            "IMPORTANT: in your CHAT REPLY confirming a reminder, do NOT say 'in N minutes' or any relative " +
+            "time — the chat is a permanent log and that text freezes at creation, which becomes wrong as " +
+            "time passes. Use the absolute clock time only ('at 14:30', 'tomorrow at 9am') OR just point the " +
+            "user at the reminder card that's already in the chat (it shows a live countdown that ticks " +
+            "down on screen automatically) and the watch face's reminder line."
 
     override val parameters: JsonObject = buildJsonObject {
         put("type", "object")
