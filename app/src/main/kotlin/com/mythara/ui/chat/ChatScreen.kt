@@ -702,12 +702,13 @@ private fun TextBubble(
         text
     }
 
-    // Music Mode renders the body as a coloured AnnotatedString —
-    // each non-stopword word gets the colour of its motif (the
-    // circular-mean of its 3 OM-harmonic hues). Computed once per
-    // (text, musicMode) pair and cached via produceState so we
-    // don't re-encode on every recomposition.
-    val composedAnnotated = if (musicMode && kind == ChatViewModel.TextKind.Reply) {
+    // Music Mode chrome — when on for a Reply, the bubble shows the
+    // coloured/glowing text (when ready) AND a persistent ▶ replay
+    // chip (always, even before the colour-encode finishes — the
+    // chip should never disappear on the user just because the
+    // suspending encode is briefly behind a recomposition).
+    val isMusicReply = musicMode && kind == ChatViewModel.TextKind.Reply
+    val composedAnnotated = if (isMusicReply) {
         produceMusicAnnotated(displayText, bodyColor)
     } else {
         null
@@ -727,12 +728,24 @@ private fun TextBubble(
                 .padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
             Column(modifier = Modifier.fillMaxWidth()) {
+                // Body text — coloured AnnotatedString once the
+                // encode completes, plain text in the meantime.
                 if (composedAnnotated != null) {
                     Text(
                         text = composedAnnotated,
                         color = bodyColor,
                         style = MaterialTheme.typography.bodyMedium,
                     )
+                } else {
+                    Text(
+                        text = displayText,
+                        color = bodyColor,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                // ▶ replay chip — always visible on Music Mode
+                // replies, independent of the colour-encode state.
+                if (isMusicReply) {
                     Spacer(Modifier.height(6.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         BubbleChip(
@@ -740,8 +753,6 @@ private fun TextBubble(
                             color = MytharaColors.SurfaceHigh,
                         ) { onReplayMusic() }
                     }
-                } else {
-                    Text(text = displayText, color = bodyColor, style = MaterialTheme.typography.bodyMedium)
                 }
             }
         }
