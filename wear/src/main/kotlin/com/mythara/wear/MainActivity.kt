@@ -417,12 +417,18 @@ private fun PttScreen(
     // an unwanted interrupt.
     ShakeToTalk(enabled = !listening && !resonanceActive) { startPtt() }
 
+    // The home column is taller than the round watch face once the mic
+    // button + Resonance toggle + nav pills are stacked together — make
+    // it scrollable (touch + rotary bezel) so the bottom row of nav
+    // pills ("people" / "logs") doesn't get clipped off-screen.
+    val homeScroll = rememberScrollState()
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
-            .padding(8.dp),
-        verticalArrangement = Arrangement.Center,
+            .rotaryScroll(homeScroll)
+            .verticalScroll(homeScroll)
+            .padding(horizontal = 8.dp, vertical = 18.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(text = "MYTHARA", color = PURPLE, fontSize = 14.sp, textAlign = TextAlign.Center)
@@ -526,6 +532,10 @@ private fun PttScreen(
                 textAlign = TextAlign.Center,
             )
         }
+        // Bottom breathing room so the footer / pad clears the curved
+        // edge of a round watch face when the column is scrolled fully
+        // down.
+        Spacer(Modifier.height(20.dp))
     }
 }
 
