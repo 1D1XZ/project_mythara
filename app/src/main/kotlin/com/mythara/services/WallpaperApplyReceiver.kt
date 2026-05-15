@@ -72,6 +72,28 @@ class WallpaperApplyReceiver : BroadcastReceiver() {
             return
         }
 
+        // Debug mood injection — drive the gradient palette without
+        // needing to actually chat with the agent.
+        //   --es target test-mood --es mood anxious
+        if (targetArg == "test-mood") {
+            val mood = intent.getStringExtra(EXTRA_MOOD).orEmpty()
+            com.mythara.branding.MoodSink.update(mood)
+            Log.i(TAG, "test-mood injected mood=$mood into MoodSink")
+            return
+        }
+
+        // Debug ripple ping — fire a thought ripple from the rose
+        // (or from a custom point if --ef ox/oy fractions are set).
+        //   --es target test-ripple
+        //   --es target test-ripple --ef ox 0.5 --ef oy 0.3
+        if (targetArg == "test-ripple") {
+            val ox = intent.getFloatExtra(EXTRA_ORIGIN_X, -1f)
+            val oy = intent.getFloatExtra(EXTRA_ORIGIN_Y, -1f)
+            com.mythara.branding.ThoughtRippleSink.ping(ox, oy)
+            Log.i(TAG, "test-ripple injected at ($ox, $oy)")
+            return
+        }
+
         val pathArg = intent.getStringExtra(EXTRA_PATH)
         if (pathArg.isNullOrBlank()) {
             Log.w(TAG, "missing required extra '$EXTRA_PATH'")
@@ -159,5 +181,16 @@ class WallpaperApplyReceiver : BroadcastReceiver() {
          *  pulse sink, so the operator can verify the HR-driven
          *  pulse rate end-to-end without the watch / Health Connect. */
         const val EXTRA_BPM = "bpm"
+
+        /** `--es mood <label>` — used with target=test-mood to drive
+         *  the gradient palette (anxious / sad / frustrated / excited
+         *  / happy, anything else falls back to neutral). */
+        const val EXTRA_MOOD = "mood"
+
+        /** `--ef ox <0..1>` and `--ef oy <0..1>` — optional ripple
+         *  origin in canvas-fraction coords. Defaults (-1, -1) mean
+         *  "centre on the rose". */
+        const val EXTRA_ORIGIN_X = "ox"
+        const val EXTRA_ORIGIN_Y = "oy"
     }
 }

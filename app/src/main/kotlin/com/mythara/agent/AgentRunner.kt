@@ -2,6 +2,8 @@ package com.mythara.agent
 
 import android.content.Context
 import android.util.Log
+import com.mythara.branding.MoodSink
+import com.mythara.branding.ThoughtRippleSink
 import com.mythara.mic.LanguageDetector
 import com.mythara.mic.Tts
 import com.mythara.services.AgentForegroundService
@@ -133,6 +135,12 @@ class AgentRunner @Inject constructor(
         val fromNotification = text.startsWith(AgentLoop.NOTIF_PREFIX)
         scope.launch {
             beginTurn()
+            // Live wallpaper acknowledgement — fires the moment the
+            // agent receives a turn so the wallpaper can ripple even
+            // if no UI is visible (background voice trigger, watch
+            // PTT, automation). Origin -1f / -1f means "centre on
+            // the rose" inside WallpaperRenderer.
+            ThoughtRippleSink.ping()
             try {
                 // Mood pre-pass. With audio: text + acoustic fusion.
                 // Without: lexical-only. Either way the just-detected
@@ -142,11 +150,15 @@ class AgentRunner @Inject constructor(
                 // message and Turn.Finished.userMoodTrend (which
                 // drives TTS pitch/rate + ElevenLabs stability/style).
                 runCatching {
-                    if (pcm != null && pcm.isNotEmpty()) {
+                    val mood = if (pcm != null && pcm.isNotEmpty()) {
                         moodTracker.trackVoice(text, pcm, pcmSampleRate)
                     } else {
                         moodTracker.track(text, fromVoice)
                     }
+                    // Pipe the just-detected label to the live
+                    // wallpaper so the gradient drifts toward this
+                    // mood's palette over the next few seconds.
+                    if (!mood.isNullOrBlank()) MoodSink.update(mood)
                 }.onFailure { Log.w(TAG, "mood track failed: ${it.message}") }
 
                 agent.submit(text, fromVoice = fromVoice).collect { turn ->

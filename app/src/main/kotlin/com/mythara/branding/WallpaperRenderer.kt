@@ -5,9 +5,11 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.Rect
+import android.graphics.Shader
 import android.util.Log
 import com.mythara.R
 import kotlin.math.cos
@@ -62,8 +64,24 @@ class WallpaperRenderer(private val ctx: Context) {
     private val petalPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val hexPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val neuronPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val gradientPaint = Paint().apply { isDither = true }
+    private val ripplePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val petalPath = Path()
     private val hexPath = Path()
+
+    // Currently-rendered gradient colours — lerp toward the mood
+    // target each frame so transitions are smooth rather than
+    // popping (a sudden mood change would otherwise be jarring on
+    // a wallpaper). Float arrays so we can lerp without integer
+    // truncation accumulating. Initial values match the neutral
+    // palette stops so the very first frame doesn't lerp out of
+    // black.
+    private val currentTopRgb = floatArrayOf(6f, 4f, 12f)        // #06040C
+    private val currentBotRgb = floatArrayOf(42f, 23f, 64f)      // #2A1740
+
+    // Active ripples drained from ThoughtRippleSink — each lives
+    // RIPPLE_DURATION_MS, then gets removed in the next frame.
+    private val activeRipples = mutableListOf<ThoughtRippleSink.Ripple>()
 
     /** A single drifting overlay node — base anchor + Lissajous drift
      *  parameters. Position at time t:
@@ -143,7 +161,13 @@ class WallpaperRenderer(private val ctx: Context) {
      * the engine started — drives the rose's slow rotation, the
      * pulse rate on the hexagon nucleus + active neurons (which
      * track live HR when available, fall back to a calm-breath
-     * default when not), and the lissajous drift on each neuron.
+     * default when not), the Lissajous drift on each neuron, the
+     * gradient lerp toward the current mood's palette, and the
+     * concentric expansion of any active thought ripples.
+     *
+     * Z-order: gradient → static layers (mesh + silhouette + wordmark)
+     * → ripples → neurons → rose. Ripples sit BELOW the neurons +
+     * rose so they don't visually punch through the brand mark.
      */
     fun render(canvas: Canvas, tMs: Long) {
         // Compute the pulse rate ONCE per frame, share between the
@@ -153,7 +177,14 @@ class WallpaperRenderer(private val ctx: Context) {
         // independently-animated layers.
         val pulseHz = effectivePulseHz()
 
-        // 1. Static layers (or a flat fallback if decoding ever fails).
+        // 1. Mood-derived gradient. The static bitmap is now baked
+        // *without* its background gradient (the Python renderer was
+        // invoked with --no-gradient + --no-rose for the bundled
+        // asset), so the gradient pixels here actually show through
+        // wherever the bitmap's alpha is 0.
+        renderGradient(canvas)
+
+        // 2. Static layers (or a flat fallback if decoding ever fails).
         val bmp = staticBitmap
         if (bmp != null) {
             canvas.drawBitmap(bmp, staticSrcRect, staticDstRect, paint)
@@ -161,18 +192,88 @@ class WallpaperRenderer(private val ctx: Context) {
             canvas.drawColor(charmtoneFallback)
         }
 
-        // 2. Active neurons — drifting bright dots overlaid on the
+        // 3. Thought ripples. Drain new ones from the sink each
+        // frame, age out the old ones, draw what's still alive.
+        renderRipples(canvas)
+
+        // 4. Active neurons — drifting bright dots overlaid on the
         // baked dim mesh. They pulse in sync with the heart rate so
         // a glance at the wallpaper conveys "you are calm" / "your
         // heart is racing" without numerals.
         renderNeurons(canvas, tMs, pulseHz)
 
-        // 3. Animated rose at canvas-middle. The static bitmap has
-        // *no* rose baked in (the Python renderer was invoked with
-        // --no-rose for the bundled asset), so this is the only
-        // rose pixels on screen.
+        // 5. Animated rose at canvas-middle. The static bitmap has
+        // *no* rose baked in, so this is the only rose pixels on
+        // screen.
         renderRose(canvas, tMs, pulseHz)
     }
+
+    /**
+     * Lerp the rendered gradient toward the current mood's target
+     * palette and paint it as a vertical LinearGradient across the
+     * full canvas. Using a Shader on a single drawRect is far
+     * cheaper than the per-row line draw the static bake uses —
+     * GPU-friendly when the canvas is hardware-accelerated.
+     *
+     * The lerp step is small (0.02 of the way per frame) so a mood
+     * change fades in over ~5-10 s rather than popping. At 12 fps
+     * that's ~24% of the way per second — visible, not jarring.
+     */
+    private fun renderGradient(canvas: Canvas) {
+        val target = MoodPalette.forLabel(MoodSink.current())
+        for (i in 0..2) {
+            currentTopRgb[i] = lerp(currentTopRgb[i], target.top[i].toFloat(), GRADIENT_LERP_RATE)
+            currentBotRgb[i] = lerp(currentBotRgb[i], target.bot[i].toFloat(), GRADIENT_LERP_RATE)
+        }
+        val topColor = Color.rgb(currentTopRgb[0].toInt(), currentTopRgb[1].toInt(), currentTopRgb[2].toInt())
+        val botColor = Color.rgb(currentBotRgb[0].toInt(), currentBotRgb[1].toInt(), currentBotRgb[2].toInt())
+        gradientPaint.shader = LinearGradient(
+            0f, 0f, 0f, h.toFloat(),
+            topColor, botColor,
+            Shader.TileMode.CLAMP,
+        )
+        canvas.drawRect(0f, 0f, w.toFloat(), h.toFloat(), gradientPaint)
+    }
+
+    /**
+     * Drain pending [ThoughtRippleSink] pings into the active list,
+     * age out anything older than [RIPPLE_DURATION_MS], then draw
+     * each surviving ripple as a stroked cyan circle expanding from
+     * its origin. Stroke alpha + width both fade toward 0 with age
+     * so a ripple "loses energy" as it spreads outward.
+     */
+    private fun renderRipples(canvas: Canvas) {
+        // 1. Drain pending pings.
+        activeRipples.addAll(ThoughtRippleSink.drainAll())
+        if (activeRipples.isEmpty()) return
+
+        // 2. Age out old ripples.
+        val now = System.currentTimeMillis()
+        activeRipples.removeAll { now - it.startMs > RIPPLE_DURATION_MS }
+        if (activeRipples.isEmpty()) return
+
+        // 3. Draw each. Origin sentinel -1f means "rose centre".
+        val roseCx = w / 2f
+        val roseCy = h / 2f - 115f * (h / 2856f)
+        val maxR = w * RIPPLE_MAX_RADIUS_FRAC
+        for (r in activeRipples) {
+            val age01 = ((now - r.startMs).toFloat() / RIPPLE_DURATION_MS).coerceIn(0f, 1f)
+            val cx = if (r.originXFrac < 0f) roseCx else r.originXFrac * w
+            val cy = if (r.originYFrac < 0f) roseCy else r.originYFrac * h
+            val radius = age01 * maxR
+            // Alpha curve: peak at the start, fade quadratically to 0.
+            val alpha = ((1f - age01) * (1f - age01) * RIPPLE_PEAK_ALPHA).toInt().coerceIn(0, 255)
+            // Stroke gets thinner with age — a young ripple is bold
+            // and crisp, an old one is whisper-thin.
+            val stroke = (RIPPLE_STROKE_PX * (1f - 0.6f * age01)) * (w / 1280f)
+            ripplePaint.color = cyan
+            ripplePaint.alpha = alpha
+            ripplePaint.strokeWidth = stroke
+            canvas.drawCircle(cx, cy, radius, ripplePaint)
+        }
+    }
+
+    private fun lerp(a: Float, b: Float, t: Float): Float = a + (b - a) * t
 
     /** Rose hex + neuron pulse rate. Maps live BPM → Hz when fresh,
      *  falls back to a calm 0.2 Hz (12 cycles/min, resting breath)
@@ -357,6 +458,23 @@ class WallpaperRenderer(private val ctx: Context) {
         private const val NEURON_ALPHA_MIN = 140
         private const val NEURON_RADIUS_BASE = 4f
         private const val NEURON_RADIUS_PULSE = 2.5f
+
+        // Gradient lerp rate — fraction of the distance to target
+        // colour the canvas moves per frame. At 12 fps a value of
+        // 0.02 means a mood change fades in over ~5-10 s, smooth
+        // enough that it reads as "the wallpaper is changing"
+        // rather than a frame-grain pop.
+        private const val GRADIENT_LERP_RATE = 0.02f
+
+        // Ripple tunables. Lifetime + max-radius set the visual
+        // pace — 2.5 s expansion to 60% of canvas width feels like
+        // a natural "pebble in pond" pulse rather than either a
+        // flash or a slow crawl. Peak alpha 180 is bright but not
+        // opaque, so it doesn't punch through brand mark behind it.
+        private const val RIPPLE_DURATION_MS = 2500L
+        private const val RIPPLE_MAX_RADIUS_FRAC = 0.60f
+        private const val RIPPLE_PEAK_ALPHA = 180
+        private const val RIPPLE_STROKE_PX = 4f
 
         // Source-unit polygon coordinates (xs/ys flat-packed) — match
         // splash_icon.xml's pathData verbatim.

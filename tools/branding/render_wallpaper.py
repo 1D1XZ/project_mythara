@@ -133,6 +133,13 @@ def parse_args() -> argparse.Namespace:
         help="skip the rose layer (used to bake static layers for the live "
              "wallpaper, which draws an animated rose on top of this PNG)",
     )
+    p.add_argument(
+        "--no-gradient",
+        action="store_true",
+        help="skip the background gradient (transparent canvas instead). "
+             "Used to bake static layers for the live wallpaper, which "
+             "renders a mood-derived dynamic gradient underneath the PNG",
+    )
     return p.parse_args()
 
 
@@ -537,9 +544,16 @@ def main() -> None:
     #   5. wordmark + version + tagline (anchored to bottom)
     # Steps 2+ all alpha-composite, so promote to RGBA after the
     # gradient is laid down.
-    img = Image.new("RGB", (w, h), BG_TOP)
-    render_gradient(img)
-    img = img.convert("RGBA")
+    if args.no_gradient:
+        # Transparent canvas — used to bake static layers for the
+        # live wallpaper, which renders a mood-derived dynamic
+        # gradient in Kotlin underneath this PNG. The output PNG
+        # keeps its alpha channel (see save() below).
+        img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    else:
+        img = Image.new("RGB", (w, h), BG_TOP)
+        render_gradient(img)
+        img = img.convert("RGBA")
 
     if not args.no_mesh:
         render_node_mesh(img, seed=args.mesh_seed)
@@ -583,10 +597,17 @@ def main() -> None:
         render_wordmark(draw, w, rose_bottom_y)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    # Flatten to RGB for the wallpaper applier — Android's
-    # WallpaperManager doesn't need the alpha channel and a flat RGB
-    # PNG is smaller / loads faster.
-    img.convert("RGB").save(args.out, "PNG", optimize=True)
+    if args.no_gradient:
+        # Preserve alpha — the live wallpaper composites this PNG on
+        # top of a Kotlin-rendered dynamic gradient. Flattening to
+        # RGB would replace transparent pixels with black, blocking
+        # the gradient entirely.
+        img.save(args.out, "PNG", optimize=True)
+    else:
+        # Flatten to RGB for the static wallpaper applier — Android's
+        # WallpaperManager doesn't need the alpha channel and a flat
+        # RGB PNG is smaller / loads faster.
+        img.convert("RGB").save(args.out, "PNG", optimize=True)
     print(f"wrote {args.out} ({w}x{h})")
 
 
