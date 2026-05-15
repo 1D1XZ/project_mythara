@@ -172,6 +172,12 @@ dependencies {
     // language facets to Observe vault records.
     implementation(libs.google.mlkit.language.id)
 
+    // ML Kit Face Detection — on-device, bundled model. Powers the
+    // front-camera face tracking on the Face avatar screen: head euler
+    // angles drive the point-cloud head's pose, eye-open probabilities
+    // drive its blink.
+    implementation(libs.google.mlkit.face.detection)
+
 
     // CameraX — headless one-shot ImageCapture for the M5 `take_photo`
     // tool. We pull core + camera2 + lifecycle (no view/preview); the

@@ -51,6 +51,9 @@ camerax = "1.4.2"
 # (0.11.0 would need Kotlin 2.3.x, which would need an AGP bump).
 litertlm = "0.10.2"
 mlkitLanguageId = "17.0.6"
+# ML Kit Face Detection — on-device, bundled model (works offline).
+# Drives the front-camera face-tracking on the Face avatar screen.
+mlkitFaceDetection = "16.1.7"
 
 # Deferred — added back when their milestone lands:
 #   camerax  → M5 (take_photo tool)
@@ -138,6 +141,10 @@ litertlm-android = { group = "com.google.ai.edge.litertlm", name = "litertlm-and
 #      answer is spoken with the Spanish voice rather than English)
 #   2. cross-checking / fallback to the active Vosk language tag
 google-mlkit-language-id = { group = "com.google.mlkit", name = "language-id", version.ref = "mlkitLanguageId" }
+
+# ML Kit Face Detection — front-camera head-pose + eye-open tracking
+# for the Face avatar screen. Bundled model, fully on-device/offline.
+google-mlkit-face-detection = { group = "com.google.mlkit", name = "face-detection", version.ref = "mlkitFaceDetection" }
 
 
 # Biometric / device-credential unlock at app entry
