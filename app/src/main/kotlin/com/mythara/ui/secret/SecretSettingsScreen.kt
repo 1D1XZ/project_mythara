@@ -19,10 +19,12 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -37,6 +39,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -959,6 +962,8 @@ fun SecretSettingsScreen(
                         ),
                     ) { Text("${Glyph.Cross} stop") }
                 }
+                Spacer(Modifier.height(14.dp))
+                ComboCheatsheet()
             }
         }
 
@@ -1060,5 +1065,94 @@ private fun ToggleRow(label: String, on: Boolean, onToggle: (Boolean) -> Unit) {
             color = MytharaColors.Fg,
             style = MaterialTheme.typography.bodyMedium,
         )
+    }
+}
+
+// ---- Resonance combo reference -------------------------------------
+// Mirrors the watch pad colours so the user can map the cheatsheet
+// they read on the phone to the buttons they tap on the watch. Order
+// matches the watch pad's grid (TL/TR/BL/BR = R/A/G/B).
+private val PAD_RED = Color(0xFFEB4268)
+private val PAD_AMBER = Color(0xFFF5B033)
+private val PAD_GREEN = Color(0xFF68FFD6)
+private val PAD_BLUE = Color(0xFF00A4FF)
+
+/**
+ * Single row in the combo cheatsheet: two colour swatches → label +
+ * one-line description. The first two arguments are the pad button
+ * colours of the 2-tap combo, in tap order.
+ */
+@Composable
+private fun ComboRow(c1: Color, c2: Color, name: String, desc: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(14.dp)
+                .clip(CircleShape)
+                .background(c1)
+                .border(1.dp, Color.White.copy(alpha = 0.18f), CircleShape),
+        )
+        Spacer(Modifier.width(4.dp))
+        Text(
+            text = "+",
+            color = MytharaColors.FgDim,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Spacer(Modifier.width(4.dp))
+        Box(
+            modifier = Modifier
+                .size(14.dp)
+                .clip(CircleShape)
+                .background(c2)
+                .border(1.dp, Color.White.copy(alpha = 0.18f), CircleShape),
+        )
+        Spacer(Modifier.width(10.dp))
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Text(
+                text = name,
+                color = MytharaColors.Fg,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                text = desc,
+                color = MytharaColors.FgDim,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ComboCheatsheet() {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = "combos · tap two buttons in sequence",
+            color = MytharaColors.FgDim,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = "PROTOCOLS",
+            color = MytharaColors.FgMute,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        ComboRow(PAD_RED, PAD_RED, "Calm", "de-escalate · target 6–10 Hz alpha/theta")
+        ComboRow(PAD_AMBER, PAD_AMBER, "Focus", "alert · low-beta band, isochronic ≤14 Hz")
+        ComboRow(PAD_GREEN, PAD_GREEN, "Wind-down", "sleep onset · 3–6 Hz theta/delta")
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = "COMMANDS",
+            color = MytharaColors.FgMute,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        ComboRow(PAD_RED, PAD_BLUE, "Check-in", "silent note to your favourite person")
+        ComboRow(PAD_GREEN, PAD_AMBER, "Mark moment", "vault row + latest HR")
+        ComboRow(PAD_BLUE, PAD_BLUE, "Start PTT", "watch push-to-talk")
+        ComboRow(PAD_RED, PAD_GREEN, "End session", "hard stop")
     }
 }
