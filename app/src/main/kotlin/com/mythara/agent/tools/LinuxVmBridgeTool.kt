@@ -1,5 +1,6 @@
 package com.mythara.agent.tools
 
+import android.util.Log
 import com.jcraft.jsch.ChannelExec
 import com.jcraft.jsch.JSch
 import com.jcraft.jsch.Session
@@ -83,8 +84,32 @@ class LinuxVmBridgeTool @Inject constructor(
             .coerceIn(500L, 120_000L)
 
         val cfg = bridge.current()
+        Log.d(
+            TAG,
+            "linux_vm invoked: host=${cfg.host} port=${cfg.port} user=${cfg.user} " +
+                "auth=${if (!cfg.privateKeyPem.isNullOrBlank()) "key" else if (!cfg.password.isNullOrBlank()) "password" else "none"} " +
+                "configured=${cfg.isConfigured} command=${command.take(120)}",
+        )
         if (!cfg.isConfigured) {
+            Log.d(TAG, "no SSH config saved — returning setup card")
             return ToolResult.ok(setupCard())
+        }
+
+        // Early diagnostic: 127.0.0.1/localhost from inside Mythara's
+        // process is Mythara itself, NOT the Linux Terminal VM. The
+        // Linux Terminal runs in a separate crosvm with its own
+        // network namespace; the user must set host to the VM's
+        // virtio-bridge IP (visible via `ip -4 addr` inside the VM —
+        // typically 192.168.x.x). Catch the common misconfiguration
+        // early with a clear message instead of a generic
+        // "connect_refused".
+        if (cfg.host == "127.0.0.1" || cfg.host.equals("localhost", ignoreCase = true)) {
+            Log.w(TAG, "host is loopback — that's Mythara's own process, not the VM")
+            return ToolResult.fail(
+                "wrong_host: host=${cfg.host} points at Mythara itself, not the Linux VM. " +
+                    "Open the Linux Terminal, run `ip -4 addr | grep inet`, and set host to the " +
+                    "VM's IP (usually starts with 192.168.x.x) in Mythara → Settings → linux bridge.",
+            )
         }
 
         return withContext(Dispatchers.IO) {
@@ -93,12 +118,14 @@ class LinuxVmBridgeTool @Inject constructor(
                     runCatching {
                         runSsh(cfg, command, timeoutMs.toInt())
                     }.getOrElse { t ->
+                        Log.w(TAG, "ssh exec failed: ${t.javaClass.simpleName}: ${t.message}", t)
                         ToolResult.fail(
                             "ssh_failed: ${t.message ?: t.javaClass.simpleName}",
                         )
                     }
                 }
             } catch (_: TimeoutCancellationException) {
+                Log.w(TAG, "ssh exec timed out after ${timeoutMs}ms")
                 ToolResult.ok("""{"status":"timeout","timeout_ms":$timeoutMs}""")
             }
         }
@@ -109,6 +136,7 @@ class LinuxVmBridgeTool @Inject constructor(
         command: String,
         timeoutMs: Int,
     ): ToolResult {
+        Log.d(TAG, "JSch connecting ${cfg.user}@${cfg.host}:${cfg.port}")
         val jsch = JSch()
 
         // Identity (private key) is preferred when set. JSch accepts
@@ -143,6 +171,7 @@ class LinuxVmBridgeTool @Inject constructor(
         }
         session.setConfig(props)
         session.connect(CONNECT_TIMEOUT_MS)
+        Log.d(TAG, "JSch session connected; opening exec channel")
 
         try {
             val channel = session.openChannel("exec") as ChannelExec
@@ -163,6 +192,7 @@ class LinuxVmBridgeTool @Inject constructor(
             val exit = if (channel.isClosed) channel.exitStatus else -1
             val merged = outStream.toString(Charsets.UTF_8) + errStream.toString(Charsets.UTF_8)
             val truncated = if (merged.length > MAX_OUT) merged.take(MAX_OUT) + "\n…[truncated]" else merged
+            Log.d(TAG, "JSch exec finished: exit=$exit out=${merged.length}b")
             channel.disconnect()
             return ToolResult.ok(
                 """{"status":"ok","exit":$exit,"out":${jsonString(truncated)}}""",
@@ -178,9 +208,10 @@ class LinuxVmBridgeTool @Inject constructor(
             "2. Open the new Terminal app from the launcher.",
             "3. Inside the VM, run: sudo apt update && sudo apt install -y openssh-server",
             "4. Start sshd: sudo service ssh start (or 'sudo systemctl enable --now ssh')",
-            "5. (Recommended) Generate a key: ssh-keygen -t ed25519 -f ~/mythara_key -N '' && cat ~/mythara_key.pub >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && cat ~/mythara_key",
-            "6. Open Mythara → Settings → 'linux bridge'. Set host=127.0.0.1, port=22, user=droid, paste the private key (BEGIN/END block) into the key field.",
-            "7. Retry this command."
+            "5. Find the VM's bridge IP: ip -4 addr | grep inet — note the address that's NOT 127.0.0.1 (usually starts with 192.168.x.x).",
+            "6. (Recommended) Generate a key: ssh-keygen -t ed25519 -f ~/mythara_key -N '' && cat ~/mythara_key.pub >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && cat ~/mythara_key",
+            "7. Open Mythara → Settings → 'linux bridge'. Set host=<the IP from step 5>, port=22, user=droid, paste the private key (BEGIN/END block) into the key field.",
+            "8. Retry this command. (Note: 127.0.0.1 will NOT work — that's Mythara's own process, not the VM.)"
         ]}""".trimIndent()
 
     private fun JsonPrimitive.contentOrNull(): String? = runCatching { content }.getOrNull()
@@ -189,6 +220,7 @@ class LinuxVmBridgeTool @Inject constructor(
             .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t") + "\""
 
     companion object {
+        private const val TAG = "Mythara/LinuxVM"
         private const val MAX_OUT = 8_192
         private const val CONNECT_TIMEOUT_MS = 5_000
         private const val POLL_INTERVAL_MS = 100L

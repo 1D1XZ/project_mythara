@@ -116,8 +116,10 @@ fun LinuxBridgePanel(vm: LinuxBridgeViewModel = hiltViewModel()) {
         Spacer(Modifier.height(6.dp))
         Text(
             text = "${Glyph.AccentBar} one-time setup: open the system Linux Terminal app, run " +
-                "`sudo apt install openssh-server && sudo service ssh start`, then paste credentials " +
-                "below. Mythara's `linux_vm` agent tool SSHes in to run commands.",
+                "`sudo apt install openssh-server && sudo service ssh start`, then " +
+                "`ip -4 addr | grep inet` to find the VM's bridge IP (usually 192.168.x.x — NOT " +
+                "127.0.0.1, which would point at Mythara itself). Paste credentials below. " +
+                "Mythara's `linux_vm` agent tool SSHes in to run commands.",
             color = MytharaColors.FgDim,
             style = MaterialTheme.typography.bodySmall,
         )
