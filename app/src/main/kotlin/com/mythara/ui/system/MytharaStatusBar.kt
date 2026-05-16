@@ -254,19 +254,24 @@ fun MytharaStatusBar(
     // minimized view default, expand on click and then auto
     // close in 5 seconds if no action."
     var expanded by remember { mutableStateOf(false) }
+    // widthFraction kept for the eventual Row.width animation
+    // computed inside the BoxWithConstraints below — when
+    // collapsed the pill collapses to a CIRCLE (width = height
+    // = STRIP_HEIGHT_DP), when expanded it grows to the parent's
+    // full width.
     val widthFraction by animateFloatAsState(
-        targetValue = if (expanded) 1f else COLLAPSED_WIDTH_FRACTION,
+        targetValue = if (expanded) 1f else 0f,
         animationSpec = tween(
             durationMillis = EXPAND_DURATION_MS,
             easing = androidx.compose.animation.core.FastOutSlowInEasing,
         ),
         label = "pillWidth",
     )
-    // Cluster items render only once the pill is wide enough to
-    // hold them comfortably (≥85% of full width). Without the
-    // gate they'd flash in INSIDE a still-narrow pill mid-
-    // animation, which reads as a glitch.
-    val showCluster = widthFraction >= 0.85f
+    // Cluster items render only once the pill is wide enough
+    // to hold them comfortably (≥70% of the way through the
+    // expand). Without the gate they'd flash in INSIDE a still-
+    // narrow pill mid-animation, which reads as a glitch.
+    val showCluster = widthFraction >= 0.70f
 
     // Auto-collapse timer — resets every time `expanded` is
     // toggled (LaunchedEffect cancels + relaunches on key
@@ -342,15 +347,35 @@ fun MytharaStatusBar(
     // adjacent to the pill, not as the pill's outer container.
     @Suppress("UNUSED_PARAMETER") val _bz = blackZoneHeightDp
     val pillBg = Color(0xCC000000)
-    Box(
+    // BoxWithConstraints so we can read the parent's actual
+    // max width as a Dp and animate the pill's width between
+    // a small circle (collapsed) and the full pill (expanded).
+    // Per user spec "make the minimized state down to a circle
+    // with the rose in the center, click on it should expand
+    // the status pill".
+    androidx.compose.foundation.layout.BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
             .padding(top = safeTopDp.dp),
         contentAlignment = Alignment.TopCenter,
     ) {
+        // Linearly interpolate the pill width between the
+        // collapsed circle (= STRIP_HEIGHT_DP) and the parent's
+        // full available width as `widthFraction` animates
+        // 0 → 1.
+        val collapsedWidthDp = STRIP_HEIGHT_DP.dp
+        val fullWidthDp = maxWidth
+        val animatedWidthDp = collapsedWidthDp +
+            (fullWidthDp - collapsedWidthDp) * widthFraction
+        // Horizontal inner padding has to be 0 when collapsed
+        // (so the circle's rose sits cleanly in the middle of
+        // a 45×45 square — any horizontal padding would push
+        // the rose off-center). Ramps to 12dp when expanded
+        // so the chrome items have breathing room.
+        val innerHPad = (12.dp.value * widthFraction).dp
         Row(
             modifier = Modifier
-                .fillMaxWidth(fraction = widthFraction)
+                .width(animatedWidthDp)
                 .height(STRIP_HEIGHT_DP.dp)
                 .clip(RoundedCornerShape(STRIP_HEIGHT_DP.dp))
                 .background(pillBg)
@@ -359,12 +384,15 @@ fun MytharaStatusBar(
                     indication = null,
                     onClick = onPillTap,
                 )
-                .padding(horizontal = 12.dp),
+                .padding(horizontal = innerHPad),
             verticalAlignment = Alignment.CenterVertically,
-            // Tighter spacing when collapsed (rose + MYTHARA
-            // need to fit a ~35% pill), wider when expanded
-            // (matches the previous full-bar layout).
-            horizontalArrangement = Arrangement.spacedBy(if (expanded) 33.dp else 12.dp),
+            // When collapsed (circle), the rose is the only
+            // child + we want it centered. SpaceBetween +
+            // Arrangement.Center collapse to Center when the
+            // Row has one child. When expanded, spread to
+            // bookend rose + MYTHARA around the cluster.
+            horizontalArrangement = if (expanded) Arrangement.spacedBy(33.dp)
+                else Arrangement.Center,
         ) {
             // ROSE — always visible. Has its OWN clickable that
             // consumes the tap before the outer pill click sees
@@ -380,8 +408,21 @@ fun MytharaStatusBar(
                         interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
                         indication = null,
                         onClick = {
-                            spinRose()
-                            onRoseTap()
+                            // Context-aware rose tap:
+                            //   - COLLAPSED (circle): expand the
+                            //     pill. Per user spec "click on
+                            //     [the circle] should expand the
+                            //     status pill".
+                            //   - EXPANDED: fire the chat shortcut
+                            //     (the original rose-tap → open
+                            //     chat semantic).
+                            // Either way: spin animation fires.
+                            if (expanded) {
+                                spinRose()
+                                onRoseTap()
+                            } else {
+                                onPillTap()
+                            }
                         },
                     ),
             ) {
@@ -447,47 +488,15 @@ fun MytharaStatusBar(
                     )
                     CircularBatteryIcon(percent = battery.percent, charging = battery.charging)
                 }
-            } else {
-                // COLLAPSED-state glance row — visible in the
-                // minimized pill. Skips Me / PTT / battery / I
-                // (those need an expand to reach). Keeps the most
-                // useful at-a-glance state: time + which networks
-                // are live + MiniMax API status.
-                Row(
-                    modifier = Modifier.weight(1f),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                ) {
-                    Text(
-                        text = nowFmt,
-                        color = MytharaColors.Fg,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Medium,
-                    )
-                    WifiIcon(active = network.isWifi, accent = SIGNAL_COLOR, sizeDp = 14)
-                    // Two dummy black round spacers between WiFi
-                    // and phone-signal icons. Visually represent
-                    // the camera-cutout zone so the minimized
-                    // pill reads as if it threads around the
-                    // hole. Non-interactive — pure visual
-                    // stand-ins.
-                    CutoutSpacerDot()
-                    CutoutSpacerDot()
-                    PhoneSignalIcon(active = network.hasCellular, accent = SIGNAL_COLOR, sizeDp = 14)
-                    Box(
-                        modifier = Modifier.clickable(
-                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                            indication = null,
-                            onClick = onOpenUsage,
-                        ),
-                    ) {
-                        HealthDot(label = "M", health = minimaxHealth, accent = MINIMAX_COLOR)
-                    }
-                }
             }
+            // (No `else` branch — collapsed state shows only the
+            // rose in a circle. Per user spec: "minimized state
+            // down to a circle with the rose in the center.")
 
-            // RIGHT: MYTHARA wordmark — always visible.
-            Text(
+            // RIGHT: MYTHARA wordmark — only when expanded.
+            // Hidden in the collapsed circle state so the rose
+            // is truly the only visible element.
+            if (showCluster) Text(
                 text = "MYTHARA",
                 color = RoseGeometry.Lavender,
                 // 10sp → 15sp + letter-spacing 1.5 → 2.25sp (1.5× scale).
