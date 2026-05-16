@@ -140,42 +140,46 @@ fun MytharaStatusBar(modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
             .fillMaxWidth()
+            // First push past the system status bar inset (camera
+            // notch / hole-punch height) so content lands BELOW the
+            // physical pinhole instead of behind it. windowInsetsPadding
+            // returns 0 when the system bar is hidden, so we ALSO
+            // lift by an explicit STATUS_BAR_TOP_PAD_DP — Pixel 10
+            // Pro's centred punch-hole sits ~22dp from the top edge.
             .windowInsetsPadding(WindowInsets.statusBars)
+            .padding(top = STATUS_BAR_TOP_PAD_DP.dp)
             .clip(RoundedCornerShape(bottomStart = 14.dp, bottomEnd = 14.dp))
             .background(MytharaColors.Bg)
             .padding(horizontal = 14.dp, vertical = 4.dp)
             .height(STRIP_HEIGHT_DP.dp),
     ) {
-        // Left: clock.
-        Text(
-            text = nowFmt,
-            color = MytharaColors.Fg,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Medium,
-            modifier = Modifier.align(Alignment.CenterStart),
-        )
-
-        // Centre: signal-strength dots + API status dots clustered
-        // together so the user reads "system + AI" health at one
-        // glance. Cluster centred so the layout remains balanced
-        // when the time / battery values change width.
+        // Left cluster: clock + signal-strength dots, kept tight
+        // so the centre stays clear for the camera punch-hole.
         Row(
-            modifier = Modifier.align(Alignment.Center),
+            modifier = Modifier.align(Alignment.CenterStart),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            Text(
+                text = nowFmt,
+                color = MytharaColors.Fg,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+            )
             SignalDots(litCount = network.bars, accent = SIGNAL_COLOR)
-            Spacer(Modifier.width(2.dp))
-            HealthDot(label = "M", health = minimaxHealth, accent = MINIMAX_COLOR)
-            HealthDot(label = "I", health = imageHealth, accent = IMAGE_COLOR)
         }
 
-        // Right: charging glyph + battery percent + glyph.
+        // Right cluster: API health dots + charging glyph + battery
+        // percent + battery glyph. Also kept tight to avoid
+        // creeping into the pinhole zone.
         Row(
             modifier = Modifier.align(Alignment.CenterEnd),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            HealthDot(label = "M", health = minimaxHealth, accent = MINIMAX_COLOR)
+            HealthDot(label = "I", health = imageHealth, accent = IMAGE_COLOR)
+            Spacer(Modifier.width(4.dp))
             if (battery.charging) {
                 Text(
                     text = "⚡",
@@ -190,6 +194,11 @@ fun MytharaStatusBar(modifier: Modifier = Modifier) {
             )
             BatteryGlyph(percent = battery.percent, charging = battery.charging)
         }
+        // Centre is INTENTIONALLY EMPTY — leaves an open band for
+        // the device's centred camera punch-hole / hole-punch to
+        // sit without overlapping any content. Modern Pixels +
+        // Galaxy phones place the cutout dead-centre at the top
+        // edge; if Mythara renders content there it'd be obscured.
     }
 }
 
@@ -281,8 +290,18 @@ private fun BatteryGlyph(percent: Int, charging: Boolean) {
     )
 }
 
-internal const val STRIP_HEIGHT_DP = 24
+internal const val STRIP_HEIGHT_DP = 28
 private const val SIGNAL_BAR_COUNT = 4
+
+/** Extra top padding beyond WindowInsets.statusBars to clear the
+ *  camera hole-punch. windowInsetsPadding returns 0 when the
+ *  system bar is hidden (which it is in launcher mode), so we
+ *  hand-tune this for modern centred-pinhole devices. ~22dp lands
+ *  the strip cleanly below the Pixel 10 Pro / Galaxy S-series
+ *  hole-punch. Devices with no notch / cutout simply gain a
+ *  small extra top margin which reads as breathing room rather
+ *  than a defect. */
+private const val STATUS_BAR_TOP_PAD_DP = 22
 
 // Palette for the new status indicators. Purple for signal so it
 // reads as a Mythara accent (matches the rose petal palette).
