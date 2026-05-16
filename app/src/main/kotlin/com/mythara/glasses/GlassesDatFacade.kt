@@ -129,17 +129,20 @@ object GlassesDatFacade {
     private val _glassesAppUpdateRequired = MutableStateFlow(false)
     val glassesAppUpdateRequired: StateFlow<Boolean> = _glassesAppUpdateRequired.asStateFlow()
 
-    /** Per-device DAT permission status for CAMERA. The SDK exposes this
-     *  separately from Android runtime permissions — granting Mythara
-     *  android.permission.CAMERA does NOT grant DAT camera access on the
-     *  glasses; the user has to confirm via the Stella companion app.
-     *  When this is Denied the device kills any session that adds the
-     *  Stream capability — surfaces as SESSION_ENDED_BY_DEVICE. The
-     *  panel uses this to gate "start session" on a "grant glasses
-     *  camera permission" button. */
+    /** Per-device DAT permission status for CAMERA + MICROPHONE. The SDK
+     *  exposes these separately from Android runtime permissions —
+     *  granting Mythara android.permission.CAMERA does NOT grant DAT
+     *  camera access on the glasses; the user has to confirm via the
+     *  Stella companion app for each. When EITHER is Denied the device
+     *  often kills the session during the initial handshake with the
+     *  generic SESSION_ENDED_BY_DEVICE error (no specific second-error
+     *  case — the device just hangs up). The panel gates "start session"
+     *  on both being Granted. */
     enum class DatPermission { Unknown, Granted, Denied }
     private val _cameraPermission = MutableStateFlow(DatPermission.Unknown)
     val cameraPermission: StateFlow<DatPermission> = _cameraPermission.asStateFlow()
+    private val _microphonePermission = MutableStateFlow(DatPermission.Unknown)
+    val microphonePermission: StateFlow<DatPermission> = _microphonePermission.asStateFlow()
 
     private val _events = MutableSharedFlow<GlassesEvent>(
         extraBufferCapacity = 8,
@@ -217,22 +220,33 @@ object GlassesDatFacade {
         _glassesAppUpdateRequired.value = false
     }
 
-    /** Re-query the DAT-side camera permission status and mirror into
-     *  [cameraPermission]. Should be called after a Stella permission
-     *  prompt completes, and at facade init. */
-    suspend fun refreshCameraPermission() {
-        Wearables.checkPermissionStatus(Permission.CAMERA).fold(
+    /** Re-query both DAT-side permissions and mirror into the state
+     *  flows. Should be called after a Stella permission prompt
+     *  completes, and at facade init. */
+    suspend fun refreshDatPermissions() {
+        refreshOne(Permission.CAMERA, _cameraPermission)
+        refreshOne(Permission.MICROPHONE, _microphonePermission)
+    }
+
+    /** Back-compat alias — older callers asked for just camera. */
+    suspend fun refreshCameraPermission() = refreshDatPermissions()
+
+    private suspend fun refreshOne(
+        perm: Permission,
+        out: MutableStateFlow<DatPermission>,
+    ) {
+        Wearables.checkPermissionStatus(perm).fold(
             onSuccess = { status ->
-                _cameraPermission.value = when (status) {
+                out.value = when (status) {
                     PermissionStatus.Granted -> DatPermission.Granted
                     PermissionStatus.Denied -> DatPermission.Denied
                     else -> DatPermission.Unknown
                 }
-                Log.d(TAG, "DAT camera permission -> ${_cameraPermission.value}")
+                Log.d(TAG, "DAT ${perm.name} permission -> ${out.value}")
             },
             onFailure = { err, _ ->
-                Log.w(TAG, "checkPermissionStatus(CAMERA) failed: ${err.description}")
-                _cameraPermission.value = DatPermission.Unknown
+                Log.w(TAG, "checkPermissionStatus(${perm.name}) failed: ${err.description}")
+                out.value = DatPermission.Unknown
             },
         )
     }
@@ -256,15 +270,17 @@ object GlassesDatFacade {
 
         _lastSessionError.value = null
 
-        // Confirm DAT-side camera permission before opening a stream.
-        // The session can `STARTING` even without it, but the moment we
-        // call addStream the device tears the session down with
-        // SESSION_ENDED_BY_DEVICE (no specific second-error case is
-        // emitted; that's why this looks like a mystery from outside).
-        refreshCameraPermission()
-        if (_cameraPermission.value != DatPermission.Granted) {
-            val msg = "DAT camera permission is ${_cameraPermission.value}; " +
-                "Mythara needs Stella's camera permission for glasses streaming"
+        // Confirm both DAT-side permissions (camera + microphone) before
+        // opening a session. The session can reach `STARTING` even
+        // without them, but the device often kills it during the
+        // handshake with the generic SESSION_ENDED_BY_DEVICE error and
+        // no specific second-error case is emitted.
+        refreshDatPermissions()
+        if (_cameraPermission.value != DatPermission.Granted ||
+            _microphonePermission.value != DatPermission.Granted
+        ) {
+            val msg = "DAT permissions — camera=${_cameraPermission.value}, " +
+                "mic=${_microphonePermission.value}; both must be Granted via Stella"
             Log.w(TAG, msg)
             _lastSessionError.value = "PERMISSION_DENIED: $msg"
             return false

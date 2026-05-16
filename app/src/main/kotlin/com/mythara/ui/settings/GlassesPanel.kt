@@ -73,20 +73,23 @@ fun GlassesPanel() {
     val sessionError by GlassesDatFacade.lastSessionError.collectAsState()
     val needsGlassesAppUpdate by GlassesDatFacade.glassesAppUpdateRequired.collectAsState()
     val cameraPerm by GlassesDatFacade.cameraPermission.collectAsState()
+    val micPerm by GlassesDatFacade.microphonePermission.collectAsState()
     val coroutineScope = rememberCoroutineScope()
 
-    // DAT-side CAMERA permission launcher — wraps Stella's permission
-    // UI behind a single button tap. The result drops back into the
-    // facade's `cameraPermission` flow so the panel re-renders.
-    val cameraPermLauncher = rememberLauncherForActivityResult(
+    // DAT-side permission launchers — wrap Stella's per-permission UI
+    // behind single button taps. Results drop back into the facade's
+    // permission flows so the panel re-renders.
+    val datPermLauncher = rememberLauncherForActivityResult(
         Wearables.RequestPermissionContract(),
-    ) { result ->
-        result.onSuccess { status ->
-            coroutineScope.launch { GlassesDatFacade.refreshCameraPermission() }
-        }.onFailure { err, _ ->
-            // Even on failure, re-probe so the state matches reality.
-            coroutineScope.launch { GlassesDatFacade.refreshCameraPermission() }
-        }
+    ) { _ ->
+        coroutineScope.launch { GlassesDatFacade.refreshDatPermissions() }
+    }
+    // First permission that's not Granted — drives the button label
+    // and the launch payload. CAMERA prompted before MICROPHONE.
+    val missingPerm: Permission? = when {
+        cameraPerm != GlassesDatFacade.DatPermission.Granted -> Permission.CAMERA
+        micPerm != GlassesDatFacade.DatPermission.Granted -> Permission.MICROPHONE
+        else -> null
     }
 
     // Runtime BLUETOOTH_CONNECT (API 31+) check + request. Without
@@ -251,19 +254,19 @@ fun GlassesPanel() {
                         )
                     }
                 }
-                if (cameraPerm != GlassesDatFacade.DatPermission.Granted &&
-                    !needsGlassesAppUpdate
-                ) {
+                if (missingPerm != null && !needsGlassesAppUpdate) {
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        text = "${Glyph.Dot} dat camera permission: ${cameraPerm.name}",
+                        text = "${Glyph.Dot} dat permissions — camera: ${cameraPerm.name}, " +
+                            "mic: ${micPerm.name}",
                         color = MytharaColors.Mustard,
                         style = MaterialTheme.typography.bodySmall,
                     )
                     Text(
-                        text = "${Glyph.AccentBar} Mythara needs the glasses-side camera permission " +
-                            "from Stella before starting a session — granting Android's CAMERA " +
-                            "permission to Mythara separately isn't enough. Tap below to ask Stella.",
+                        text = "${Glyph.AccentBar} The device kills sessions with the generic " +
+                            "SESSION_ENDED_BY_DEVICE if either DAT permission isn't Granted via " +
+                            "Stella (separate from Android runtime perms). Grant both — the button " +
+                            "below cycles through whichever is missing.",
                         color = MytharaColors.FgDim,
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -284,13 +287,18 @@ fun GlassesPanel() {
                                 contentColor = MytharaColors.Bg,
                             ),
                         ) { Text("update glasses app") }
-                        cameraPerm != GlassesDatFacade.DatPermission.Granted -> Button(
-                            onClick = { cameraPermLauncher.launch(Permission.CAMERA) },
+                        missingPerm != null -> Button(
+                            onClick = { datPermLauncher.launch(missingPerm) },
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = MytharaColors.Charple,
                                 contentColor = MytharaColors.Bg,
                             ),
-                        ) { Text("grant glasses camera") }
+                        ) {
+                            Text(
+                                if (missingPerm == Permission.CAMERA) "grant glasses camera"
+                                else "grant glasses microphone",
+                            )
+                        }
                         else -> Button(
                             onClick = { GlassesConnectionService.start(ctx) },
                             colors = ButtonDefaults.buttonColors(
@@ -368,13 +376,18 @@ fun GlassesPanel() {
                                 contentColor = MytharaColors.Bg,
                             ),
                         ) { Text("update glasses app") }
-                        cameraPerm != GlassesDatFacade.DatPermission.Granted -> Button(
-                            onClick = { cameraPermLauncher.launch(Permission.CAMERA) },
+                        missingPerm != null -> Button(
+                            onClick = { datPermLauncher.launch(missingPerm) },
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = MytharaColors.Charple,
                                 contentColor = MytharaColors.Bg,
                             ),
-                        ) { Text("grant glasses camera") }
+                        ) {
+                            Text(
+                                if (missingPerm == Permission.CAMERA) "grant glasses camera"
+                                else "grant glasses microphone",
+                            )
+                        }
                         else -> Button(
                             onClick = { GlassesConnectionService.start(ctx) },
                             colors = ButtonDefaults.buttonColors(
