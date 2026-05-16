@@ -326,6 +326,12 @@ fun MytharaStatusBar(
             .fillMaxWidth()
             .height(blackZoneHeightDp.dp)
             .background(Color.Black)
+            // Top padding pushes the pill BELOW the system
+            // status bar's input-capture zone — without this,
+            // SystemUI intercepts taps in y=0-24dp and our
+            // pill's clickable never fires. See
+            // OVERLAY_PILL_TOP_INSET_DP doc for the geometry.
+            .padding(top = OVERLAY_PILL_TOP_INSET_DP.dp)
     } else {
         modifier
             .fillMaxWidth()
@@ -333,7 +339,7 @@ fun MytharaStatusBar(
     }
     Box(
         modifier = outerMod,
-        contentAlignment = if (hasBlackZone) Alignment.Center else Alignment.TopCenter,
+        contentAlignment = Alignment.TopCenter,
     ) {
         Row(
             modifier = Modifier
@@ -792,16 +798,41 @@ private const val EXPAND_DURATION_MS = 350
  *  ("auto close in 5 seconds if no action"). */
 private const val AUTO_COLLAPSE_MS = 5_000L
 
-/** Black-zone height (dp) used by the overlay variant to wrap
- *  the pill in a solid black rectangle at the top of the
- *  screen, hiding the camera cutout. Sized to comfortably
- *  contain the 30dp STRIP_HEIGHT_DP pill PLUS the Pixel 10
- *  Pro's cutout extent (~26dp from top) with a few dp of
- *  visual breathing room. 40dp lands cleanly: pill centered
- *  at y=5-35dp, cutout (12-26dp from top) sits inside the
- *  pill's vertical span, all hidden behind the solid black
- *  bg layer. */
-const val OVERLAY_BLACK_ZONE_HEIGHT_DP = 40
+/** Black-zone height (dp) used by the overlay variant.
+ *
+ *  Why 64 and not the 40 we had before: the OS's own system
+ *  status bar (clock/signal/battery in white text, rendered
+ *  by SystemUI) occupies roughly y=0 to y=24dp on most
+ *  modern Android devices. SystemUI's window sits ABOVE our
+ *  TYPE_APPLICATION_OVERLAY in input-dispatch order, so any
+ *  touch in y=0-24dp is consumed by SystemUI before it can
+ *  reach our overlay's ComposeView — which is exactly why
+ *  the previous version's overlay taps appeared dead while
+ *  the in-app pill (which doesn't share that zone) worked
+ *  fine.
+ *
+ *  Layout now (64dp tall):
+ *    - y=0-24dp:   black bg only, covers the system status
+ *                   bar zone + the camera cutout (which
+ *                   sits inside y=12-26dp on Pixel 10 Pro).
+ *                   Non-interactive — anything here gets
+ *                   eaten by SystemUI anyway.
+ *    - y=24-58dp:  the pill itself (~34dp band, contains
+ *                   the 30dp pill with a few dp of breathing
+ *                   room) — BELOW the system status bar,
+ *                   so taps land on Compose.
+ *    - y=58-64dp:  small bottom padding so the pill doesn't
+ *                   kiss the black-zone edge.
+ *
+ *  In mm: 64 dp at 160 dpi base = 10.16 mm.
+ *  In px on Pixel 10 Pro (408 dpi): 163 px. */
+const val OVERLAY_BLACK_ZONE_HEIGHT_DP = 64
+
+/** Top padding inside the black zone — pushes the pill BELOW
+ *  the system status bar zone so SystemUI doesn't intercept
+ *  the touch. Matches WindowInsets.statusBars.top on most
+ *  devices (24dp), with 4dp of extra clearance. */
+const val OVERLAY_PILL_TOP_INSET_DP = 28
 private const val SIGNAL_BAR_COUNT = 4
 private const val BATTERY_ICON_DP = 16
 private const val ME_AVATAR_DP = 18
