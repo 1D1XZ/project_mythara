@@ -572,19 +572,20 @@ private suspend fun buildAmuletPages(
     onLaunchPackage: (String) -> Unit,
     onPttPlaceholder: () -> Unit,
 ): List<AmuletPage> {
-    // Page 0: primary nav destinations. Same 9 + spotlight that
-    // the previous amulet exposed, just shaped as AmuletChip.
+    // Page 0: primary nav destinations. Same 9 + spotlight,
+    // now with apt emoji glyphs instead of the single-letter
+    // defaults so each chip is instantly recognisable.
     val menuChips = listOf(
-        chipAt(0f, "chat", MytharaColors.Bok) { onNavigate(Routes.Chat) },
-        chipAt(36f, "settings", MytharaColors.SurfaceHigh) { onNavigate(Routes.Settings) },
-        chipAt(72f, "perms", MytharaColors.Charple) { onNavigate(Routes.Permissions) },
-        chipAt(108f, "insights", MytharaColors.Bok) { onNavigate(Routes.Insights) },
-        chipAt(144f, "face", MytharaColors.Bok) { onNavigate(Routes.Face) },
-        chipAt(180f, "triage", MytharaColors.Charple) { onNavigate(Routes.Triage) },
-        chipAt(216f, "people", MytharaColors.Charple) { onNavigate(Routes.People) },
-        chipAt(252f, "drawer", MytharaColors.Mustard) { onNavigate(ROUTE_SPOTLIGHT) },
-        chipAt(288f, "usage", MytharaColors.Mustard) { onNavigate(Routes.Usage) },
-        chipAt(324f, "dash", MytharaColors.Malibu) { onNavigate(Routes.Dashboard) },
+        chipGlyph(0f, "chat", "💬", MytharaColors.Bok) { onNavigate(Routes.Chat) },
+        chipGlyph(36f, "settings", "⚙", MytharaColors.SurfaceHigh) { onNavigate(Routes.Settings) },
+        chipGlyph(72f, "perms", "🔐", MytharaColors.Charple) { onNavigate(Routes.Permissions) },
+        chipGlyph(108f, "insights", "📈", MytharaColors.Bok) { onNavigate(Routes.Insights) },
+        chipGlyph(144f, "face", "😀", MytharaColors.Bok) { onNavigate(Routes.Face) },
+        chipGlyph(180f, "triage", "🔔", MytharaColors.Charple) { onNavigate(Routes.Triage) },
+        chipGlyph(216f, "people", "👥", MytharaColors.Charple) { onNavigate(Routes.People) },
+        chipGlyph(252f, "drawer", "▦", MytharaColors.Mustard) { onNavigate(ROUTE_SPOTLIGHT) },
+        chipGlyph(288f, "usage", "📊", MytharaColors.Mustard) { onNavigate(Routes.Usage) },
+        chipGlyph(324f, "dash", "🧭", MytharaColors.Malibu) { onNavigate(Routes.Dashboard) },
     )
 
     // Page 1: PTT actions — current placeholder dispatches to
@@ -600,17 +601,15 @@ private suspend fun buildAmuletPages(
         chipGlyph(270f, "voice", "∞", MytharaColors.Bok, onPttPlaceholder),
     )
 
-    // Page 2: previously-orphan secondary screens. These exist
-    // as routes but weren't in the menu wheel; surfacing them
-    // here gives the user a path to every non-tablet-only
-    // screen Mythara ships.
+    // Page 2: previously-orphan secondary screens. Same emoji
+    // treatment as the menu page so the icons read at a glance.
     val moreChips = listOf(
-        chipAt(0f, "memory", MytharaColors.Bok) { onNavigate(Routes.Memory) },
-        chipAt(60f, "tasks", MytharaColors.Mustard) { onNavigate(Routes.Tasks) },
-        chipAt(120f, "notes", MytharaColors.Charple) { onNavigate(Routes.Notes) },
-        chipAt(180f, "music vocab", MytharaColors.Bok) { onNavigate(Routes.MusicVocab) },
-        chipAt(240f, "about me", MytharaColors.Charple) { onNavigate(Routes.AboutMe) },
-        chipAt(300f, "about", MytharaColors.SurfaceHigh) { onNavigate(Routes.About) },
+        chipGlyph(0f, "memory", "📷", MytharaColors.Bok) { onNavigate(Routes.Memory) },
+        chipGlyph(60f, "tasks", "✓", MytharaColors.Mustard) { onNavigate(Routes.Tasks) },
+        chipGlyph(120f, "notes", "📝", MytharaColors.Charple) { onNavigate(Routes.Notes) },
+        chipGlyph(180f, "music vocab", "♬", MytharaColors.Bok) { onNavigate(Routes.MusicVocab) },
+        chipGlyph(240f, "about me", "👤", MytharaColors.Charple) { onNavigate(Routes.AboutMe) },
+        chipGlyph(300f, "about", "ℹ", MytharaColors.SurfaceHigh) { onNavigate(Routes.About) },
     )
 
     // Page 3+: installed launcher apps, 8 per page. Each chip
