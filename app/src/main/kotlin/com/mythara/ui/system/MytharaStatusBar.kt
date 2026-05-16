@@ -70,23 +70,32 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * Mythara's own status strip rendered at the top of every screen
- * since the system status bar is hidden in launcher mode.
+ * Mythara's **Dynamic Island** — a single floating pill at the
+ * top of every screen that holds the brand mark AND the system
+ * chrome the OS status bar would normally show (which we hide in
+ * launcher mode). NOT a "status bar" in the old chrome-row sense
+ * — it's a discrete island the user identifies with, that just
+ * happens to also carry the status indicators.
  *
  * Layout (left → right):
- *   - Clock (HH:mm, monospace-ish)
- *   - 4 signal-strength dots (purple, glowing) — lit count tracks
- *     network connectivity (offline → all grey; cellular without
- *     wifi → 2-3 lit; full wifi → all 4 lit)
- *   - MiniMax API status dot (blue glowing when online, grey when
- *     offline / no key, red on recent error)
- *   - Image API status dot (yellow glowing same semantics)
- *   - Battery percent + glyph
+ *   - 🌸 Rose mark (left edge) — tap → 360° spin + clears any
+ *     active DynamicIslandSink insight
+ *   - Clock (HH:mm)
+ *   - 4 signal-strength dots (purple)
+ *   - MiniMax API status dot (M●, blue when online)
+ *   - Image API status dot (I●, yellow when online)
+ *   - Me avatar (tap → AboutMe)
+ *   - 🎙 PTT button (tap → fires ACTION_ASSIST → MainActivity's
+ *     voice handler kicks in, same code path as Pixel Buds
+ *     touch-and-hold)
+ *   - Battery percent + circular battery icon
+ *   - MYTHARA wordmark (right edge)
  *
- * Respects the system status-bar inset via windowInsetsPadding so
- * the strip never clips the camera notch / hole-punch on devices
- * that have one. The whole strip is clipped with a rounded bottom
- * to avoid a hard edge against the chat content beneath.
+ * The pill positions ITSELF below the camera cutout via the
+ * safeTopDp math (safeTopDp = cutout.bottomDp + 4 when a cutout
+ * is present), with 16dp side margins so the wallpaper shows
+ * through on either side — reinforcing the "discrete island"
+ * read rather than "edge-to-edge system bar".
  *
  * Permission posture: requires only ACCESS_NETWORK_STATE (already
  * declared). Cellular signal strength would need READ_PHONE_STATE
@@ -206,17 +215,33 @@ fun MytharaStatusBar(
     // height like a regular status bar"). The pill is now full-
     // width + thin (~30dp), with the brand mark bracketing the
     // utility content.
+    // This pill IS the Dynamic Island. Not a "status bar" in the
+    // old Android-chrome sense — it's the floating brand-marked
+    // pill the user identifies with, that happens to also carry
+    // the status chrome. Side margins (16dp) + rounded ends
+    // (clip to pill height) keep it reading as a discrete
+    // floating element with the wallpaper visible on either side,
+    // rather than an edge-to-edge system bar.
     val pillBg = Color(0xCC000000)
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(top = safeTopDp.dp, start = 8.dp, end = 8.dp)
+            .padding(top = safeTopDp.dp, start = 16.dp, end = 16.dp)
             .height(STRIP_HEIGHT_DP.dp)
             .clip(RoundedCornerShape(STRIP_HEIGHT_DP.dp))
             .background(pillBg)
-            .padding(horizontal = 10.dp),
+            .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        // Inter-child spacing widened from 8dp → 33dp per user
+        // request "widen the gap between rose and MYTHARA by
+        // 0.8 cm". 0.8 cm ≈ 50 dp total; with two gaps
+        // (rose↔middle + middle↔MYTHARA) splitting the added
+        // space symmetrically lands ~25 dp extra each side
+        // (8 + 25 = 33). The middle cluster's weight(1f)
+        // compresses accordingly so the centre items just
+        // tighten up — rose + MYTHARA get more visible
+        // separation without the cluster overflowing.
+        horizontalArrangement = Arrangement.spacedBy(33.dp),
     ) {
         // LEFT: the rose. Tap → spin animation + clear sink.
         // Delegates to the same SpinningRoseTap helper used by
