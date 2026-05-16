@@ -139,6 +139,16 @@ class MytharaApp : Application(), Configuration.Provider {
         // and brand/system senders. Behaviour-event side-channel
         // feeds the daily summariser for pattern derivation.
         crossAppPersonObserver.start()
+        // Lock-screen Dynamic Island overlay. Only starts when
+        // SYSTEM_ALERT_WINDOW has been granted (the user flips
+        // this in Permissions screen → "draw over other apps").
+        // Idempotent — re-grant after a previous session reflects
+        // on the next process start. The service is sticky, so
+        // once started it survives until either the user revokes
+        // the permission or the system kills us.
+        if (com.mythara.services.LockscreenIslandService.canRender(this)) {
+            com.mythara.services.LockscreenIslandService.start(this)
+        }
         // Daily Gemma rebuild of every per-contact profile so the
         // People screen stays current as conversations + imports
         // accumulate. The builder itself self-gates so the actual

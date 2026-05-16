@@ -410,6 +410,17 @@ private fun permissionItems(ctx: Context): List<PermissionItem> {
             Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
         } else null,
     )
+    list += PermissionItem(
+        key = "overlay",
+        title = "draw over other apps",
+        subtitle = "lock-screen + cross-app Dynamic Island overlay (mirrors the in-app pill)",
+        kind = PermKind.Special,
+        isGranted = com.mythara.services.LockscreenIslandService.canRender(ctx),
+        specialIntent = Intent(
+            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+            Uri.parse("package:${ctx.packageName}"),
+        ),
+    )
 
     return list
 }

@@ -18,6 +18,15 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- Lock-screen Dynamic Island overlay. The
+         LockscreenIslandService draws the same wrapping pill the
+         in-app status bar shows, but as a system overlay window
+         so it's visible over other apps + (where Android allows
+         it) over the lock screen. Manifest permission is the
+         install-time grant; SYSTEM_ALERT_WINDOW also requires the
+         user to flip the per-app toggle in Settings → Special app
+         access → Display over other apps. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <!-- Phone-control + communication (gated; require explicit user consent) -->
     <uses-permission android:name="android.permission.SEND_SMS" />
@@ -359,6 +368,28 @@
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="persistent assistant keepalive for in-flight agent turns" />
+        </service>
+
+        <!-- Lock-screen Dynamic Island overlay service. Foreground
+             service of type `specialUse` — runs persistently,
+             draws an overlay window via WindowManager that mirrors
+             the in-app status-bar Dynamic Island, so the user sees
+             the pill at the same screen position whether they're
+             inside Mythara, on another app's surface, or on the
+             lock screen itself.
+             Visibility on the secure keyguard depends on Android's
+             window-Z policy (TYPE_APPLICATION_OVERLAY usually
+             draws over the wallpaper but BELOW the secure keyguard
+             on Android 12+); the overlay is best-effort there and
+             always-visible elsewhere. -->
+        <service
+            android:name=".services.LockscreenIslandService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            tools:targetApi="34">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="dynamic-island system overlay so the user can glance at agent state from anywhere" />
         </service>
 
         <!-- Wear OS push-to-talk listener. The paired Pixel Watch

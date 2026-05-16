@@ -168,20 +168,33 @@ fun MytharaStatusBar(
     // a single centred pill.
     val cutout = rememberCutoutRect()
 
-    // Top padding strategy: when we have a real cutout rect, use
-    // the cutout's BOTTOM as the floor (so the strip sits flush
-    // beneath the actual hole, not artificially pushed down). When
-    // we don't, fall back to the system insets + a small Pixel-
-    // floor minimum.
+    // Top padding strategy — iPhone-style, NOT push-below-cutout.
     //
-    // The previous version forced PIXEL_PINHOLE_FLOOR_DP=40 even
-    // when the OS already reported a smaller real inset — that
-    // pushed the strip down too far on Pixel 10 Pro. We now only
-    // use the floor as a SAFETY net, not a default.
+    // The previous version padded the strip's TOP to cutout.bottom,
+    // which pushed the entire status row 30+ dp from the screen
+    // edge — way below the cutout. That looked wrong because the
+    // clock + battery were sitting BELOW the camera hole, instead
+    // of beside it.
+    //
+    // The correct model is: the strip's VERTICAL CENTER aligns
+    // with the cutout's vertical center. Then:
+    //   - Clock + signal dots (left cluster, anchored to strip's
+    //     CenterStart) sit at the same height as the cutout, just
+    //     to the left of it.
+    //   - Me + M + I + battery (right cluster, anchored to strip's
+    //     CenterEnd) sit at the same height as the cutout, just to
+    //     the right of it.
+    //   - The Dynamic Island (centred) wraps AROUND the cutout
+    //     with its left + right halves.
+    // All three on a single horizontal line that THREADS through
+    // the cutout — exactly the iPhone Dynamic Island layout.
+    //
+    // Math: top-padding = cutout.centerY - STRIP_HEIGHT/2 — that
+    // puts the strip's center on the cutout's center.
     val cutoutTopDp = WindowInsets.displayCutout.asPaddingValues().calculateTopPadding()
     val statusTopDp = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val safeTopDp = when {
-        cutout != null -> cutout.bottomDp + 2f  // sit flush beneath the actual hole
+        cutout != null -> (cutout.centerYDp - STRIP_HEIGHT_DP / 2f).coerceAtLeast(0f)
         cutoutTopDp.value > 0f -> cutoutTopDp.value
         statusTopDp.value > 0f -> statusTopDp.value
         else -> PIXEL_PINHOLE_FLOOR_DP.toFloat()
