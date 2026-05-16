@@ -476,6 +476,12 @@ fun SettingsScreen(
         Spacer(Modifier.height(16.dp))
         ShizukuPanel()
 
+        // Capability Expansion v3 — Meta Display Glasses pairing +
+        // session control. Surfaces current DAT connection state,
+        // registration button, start/stop FGS for the live session.
+        Spacer(Modifier.height(16.dp))
+        GlassesPanel()
+
         Spacer(Modifier.height(16.dp))
         Row(modifier = Modifier.fillMaxWidth()) {
             TextButton(onClick = onOpenPeople) {
