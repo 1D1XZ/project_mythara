@@ -35,6 +35,19 @@ class SkillStore @Inject constructor(
         classDiscriminator = "action"
     }
 
+    /**
+     * Delete every vault row backing the named skill. Phase L —
+     * lets the user wipe a skill from the SkillsPanel UI.
+     *
+     * Returns the number of rows removed (every saved version of
+     * the skill). Synced peers will see the same deletion on next
+     * MemorySync heartbeat because the underlying memory file gets
+     * regenerated.
+     */
+    suspend fun delete(name: String): Int = runCatching {
+        vault.deleteByFacet("skill-name:$name")
+    }.getOrDefault(0)
+
     /** Save (or update) a skill. Returns the version that landed. */
     suspend fun save(skill: Skill): Boolean {
         val asJson = encode(skill)

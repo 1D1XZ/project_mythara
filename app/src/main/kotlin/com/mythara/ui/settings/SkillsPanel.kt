@@ -29,6 +29,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mythara.skills.Skill
+import com.mythara.skills.SkillRunner
 import com.mythara.skills.SkillStore
 import com.mythara.ui.theme.Glyph
 import com.mythara.ui.theme.MytharaColors
@@ -45,12 +46,18 @@ import javax.inject.Inject
 @HiltViewModel
 class SkillsPanelViewModel @Inject constructor(
     private val store: SkillStore,
+    private val runner: SkillRunner,
 ) : ViewModel() {
     private val _skills = MutableStateFlow<List<Skill>>(emptyList())
     val skills: StateFlow<List<Skill>> = _skills.asStateFlow()
 
     private val _loading = MutableStateFlow(true)
     val loading: StateFlow<Boolean> = _loading.asStateFlow()
+
+    /** Per-skill run status surfaced to the UI ("running…", "ok",
+     *  "failed: <reason>"). Cleared after [STATUS_CLEAR_MS]. */
+    private val _runStatus = MutableStateFlow<Map<String, String>>(emptyMap())
+    val runStatus: StateFlow<Map<String, String>> = _runStatus.asStateFlow()
 
     fun refresh() {
         viewModelScope.launch {
@@ -59,6 +66,44 @@ class SkillsPanelViewModel @Inject constructor(
                 .sortedByDescending { it.lastRunMs ?: it.createdMs }
             _loading.value = false
         }
+    }
+
+    /** Fire-and-forget run from the panel (Phase L). Parameter-less
+     *  skills only — anything with required `params` would need a
+     *  per-param input dialog which the panel doesn't (yet) build. */
+    fun run(skill: Skill) {
+        viewModelScope.launch {
+            _runStatus.update(skill.name, "${Glyph.Ellipsis} running…")
+            val result = runCatching { runner.run(skill, params = emptyMap()) }
+            val label = result.fold(
+                onSuccess = { res ->
+                    if (res.ok) "${Glyph.Check} ok · ${res.stepsExecuted}/${res.totalSteps} step${if (res.totalSteps == 1) "" else "s"}"
+                    else "${Glyph.Cross} failed at step ${res.failureAtStep ?: "?"}: ${(res.failureReason ?: "unknown").take(60)}"
+                },
+                onFailure = { "${Glyph.Cross} threw: ${it.message?.take(60) ?: it.javaClass.simpleName}" },
+            )
+            _runStatus.update(skill.name, label)
+            // Reload so lastRunMs / runCount badges refresh.
+            refresh()
+            kotlinx.coroutines.delay(STATUS_CLEAR_MS)
+            _runStatus.update(skill.name, null)
+        }
+    }
+
+    /** Wipe a skill (every saved version). Phase L. */
+    fun delete(name: String) {
+        viewModelScope.launch {
+            runCatching { store.delete(name) }
+            refresh()
+        }
+    }
+
+    private fun MutableStateFlow<Map<String, String>>.update(key: String, value: String?) {
+        this.value = if (value == null) this.value - key else this.value + (key to value)
+    }
+
+    companion object {
+        private const val STATUS_CLEAR_MS = 6_000L
     }
 }
 
@@ -76,7 +121,9 @@ class SkillsPanelViewModel @Inject constructor(
 fun SkillsPanel(vm: SkillsPanelViewModel = hiltViewModel()) {
     val skills by vm.skills.collectAsState()
     val loading by vm.loading.collectAsState()
+    val runStatus by vm.runStatus.collectAsState()
     var expanded by remember { mutableStateOf<String?>(null) }
+    var pendingDelete by remember { mutableStateOf<Skill?>(null) }
 
     LaunchedEffect(Unit) { vm.refresh() }
 
@@ -124,11 +171,48 @@ fun SkillsPanel(vm: SkillsPanelViewModel = hiltViewModel()) {
                     SkillRow(
                         skill = skill,
                         expanded = expanded == skill.name,
+                        status = runStatus[skill.name],
                         onClick = { expanded = if (expanded == skill.name) null else skill.name },
+                        onRun = { vm.run(skill) },
+                        onDelete = { pendingDelete = skill },
                     )
                 }
             }
         }
+    }
+
+    pendingDelete?.let { skill ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = {
+                Text("delete \"${skill.name}\"?", color = MytharaColors.Fg)
+            },
+            text = {
+                Text(
+                    "wipes every saved version of this skill. " +
+                        "Mythara can re-learn it the next time the user walks through the procedure.",
+                    color = MytharaColors.FgDim,
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.Button(
+                    onClick = {
+                        vm.delete(skill.name)
+                        pendingDelete = null
+                    },
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                        containerColor = MytharaColors.Sriracha,
+                        contentColor = MytharaColors.Fg,
+                    ),
+                ) { Text("${Glyph.Cross} delete") }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { pendingDelete = null }) {
+                    Text("cancel", color = MytharaColors.FgMute)
+                }
+            },
+            containerColor = MytharaColors.Surface,
+        )
     }
 }
 
@@ -136,7 +220,12 @@ fun SkillsPanel(vm: SkillsPanelViewModel = hiltViewModel()) {
 private fun SkillRow(
     skill: Skill,
     expanded: Boolean,
+    /** Per-skill status caption from the most recent run / delete
+     *  action. Null when nothing's running. */
+    status: String?,
     onClick: () -> Unit,
+    onRun: () -> Unit,
+    onDelete: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -216,6 +305,41 @@ private fun SkillRow(
                     color = MytharaColors.Sriracha,
                     style = MaterialTheme.typography.labelSmall,
                 )
+            }
+            // Run + delete actions, only visible while expanded. Run
+            // is disabled for skills with required params (would
+            // need a per-param input dialog the panel doesn't build
+            // yet — agent calls remain the path for parameterised
+            // skills).
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                androidx.compose.material3.TextButton(
+                    onClick = onRun,
+                    enabled = skill.params.isEmpty(),
+                ) {
+                    Text(
+                        text = if (skill.params.isEmpty())
+                            "${Glyph.DiamondFilled} run now"
+                        else "${Glyph.DiamondOutline} needs params — ask Mythara",
+                        color = if (skill.params.isEmpty()) MytharaColors.Bok else MytharaColors.FgDim,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                androidx.compose.material3.TextButton(onClick = onDelete) {
+                    Text(
+                        "${Glyph.Cross} delete",
+                        color = MytharaColors.Sriracha,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+            status?.let {
+                Spacer(Modifier.height(2.dp))
+                Text(it, color = MytharaColors.FgDim, style = MaterialTheme.typography.labelSmall)
             }
         }
     }
