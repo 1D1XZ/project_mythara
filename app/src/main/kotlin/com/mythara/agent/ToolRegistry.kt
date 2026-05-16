@@ -110,6 +110,11 @@ class ToolRegistry @Inject constructor(
     // `ifconfig` / `hostname -I` paths return Permission denied on
     // Android, so this is the canonical way to ask "what's my IP").
     networkInfoTool: com.mythara.agent.tools.NetworkInfoTool,
+    // Phase F — quality-of-life tools.
+    readClipboardTool: com.mythara.agent.tools.ReadClipboardTool,
+    setAlarmTool: com.mythara.agent.tools.SetAlarmTool,
+    screenshotTool: com.mythara.agent.tools.ScreenshotTool,
+    searchPhotosTool: com.mythara.agent.tools.SearchPhotosTool,
     private val mcpRegistry: com.mythara.mcp.McpRegistry,
     private val gate: ConfirmationGate,
     private val allowlist: com.mythara.data.AllowlistStore,
@@ -176,6 +181,10 @@ class ToolRegistry @Inject constructor(
         cosmeticTool,
         listCosmeticTool,
         networkInfoTool,
+        readClipboardTool,
+        setAlarmTool,
+        screenshotTool,
+        searchPhotosTool,
     )
 
     /** Native + currently-known MCP tools, merged. Recomputed on every
