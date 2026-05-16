@@ -257,11 +257,11 @@ class LockscreenIslandService : Service() {
                     // of the current one. The status must be
                     // the new overlay").
                     com.mythara.ui.system.MytharaStatusBar(
-                        // Black-zone wrapper: solid black bar
-                        // at the top, height = 40dp, hides the
-                        // camera cutout behind it. Pill sits
-                        // centered inside.
-                        blackZoneHeightDp = com.mythara.ui.system.OVERLAY_BLACK_ZONE_HEIGHT_DP,
+                        // Pill positioned below SystemUI's
+                        // status bar zone via safeTopDp (= cutout
+                        // bottom + 4dp on cutout devices). No
+                        // black-zone wrapper — it broke the
+                        // overlay's pointer-input dispatch.
                         onRoseTap = {
                             // Star → open chat. Deep-link via
                             // MainActivity + EXTRA_OPEN_ROUTE.

@@ -319,26 +319,29 @@ fun MytharaStatusBar(
     //   - When blackZoneHeightDp == 0 (in-app mode default),
     //     the outer Box is transparent + heightless, the pill
     //     just floats below the cutout via safeTopDp.
+    // Simple positioning — pill sits below the system status
+    // bar via safeTopDp (which already accounts for the
+    // cutout / system inset). The earlier "wrap in a 64dp
+    // black box at the top of the screen" experiment broke the
+    // overlay's touch dispatch: stacking a fixed-height Box
+    // with .background() around the pill changed the way
+    // Compose laid out the pointer-input nodes inside a
+    // WindowManager-hosted ComposeView, and clicks stopped
+    // firing entirely. The old simple structure (pill
+    // positioned by safeTopDp, no surrounding fixed-size Box)
+    // dispatched taps correctly, so we're back to that.
+    //
+    // blackZoneHeightDp is now ignored — the param stays for
+    // API stability with existing callers but doesn't render
+    // a wrapping background. If a "black bar at top" effect
+    // is wanted in future, do it via a SEPARATE composable
+    // adjacent to the pill, not as the pill's outer container.
+    @Suppress("UNUSED_PARAMETER") val _bz = blackZoneHeightDp
     val pillBg = Color(0xCC000000)
-    val hasBlackZone = blackZoneHeightDp > 0
-    val outerMod = if (hasBlackZone) {
-        modifier
-            .fillMaxWidth()
-            .height(blackZoneHeightDp.dp)
-            .background(Color.Black)
-            // Top padding pushes the pill BELOW the system
-            // status bar's input-capture zone — without this,
-            // SystemUI intercepts taps in y=0-24dp and our
-            // pill's clickable never fires. See
-            // OVERLAY_PILL_TOP_INSET_DP doc for the geometry.
-            .padding(top = OVERLAY_PILL_TOP_INSET_DP.dp)
-    } else {
-        modifier
-            .fillMaxWidth()
-            .padding(top = safeTopDp.dp)
-    }
     Box(
-        modifier = outerMod,
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(top = safeTopDp.dp),
         contentAlignment = Alignment.TopCenter,
     ) {
         Row(

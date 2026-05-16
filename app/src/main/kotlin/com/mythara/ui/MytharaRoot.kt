@@ -210,14 +210,11 @@ fun MytharaRoot(
                         modifier = Modifier.fillMaxSize(),
                     ) {
                     MytharaStatusBar(
-                        // In-app pill ALSO uses the black-zone
-                        // wrapper now so the visual continuity
-                        // between the overlay and the in-app
-                        // surface is preserved (same height,
-                        // same cutout-hiding bar). User's spec:
-                        // "move it up and turn the complete
-                        // upper portion black".
-                        blackZoneHeightDp = com.mythara.ui.system.OVERLAY_BLACK_ZONE_HEIGHT_DP,
+                        // Pill sits below the system status bar
+                        // via safeTopDp positioning. No black-
+                        // zone wrapper (it broke overlay tap
+                        // dispatch — see the comment inside
+                        // MytharaStatusBar).
                         onRoseTap = {
                             nav.navigate(Routes.Chat) {
                                 launchSingleTop = true
