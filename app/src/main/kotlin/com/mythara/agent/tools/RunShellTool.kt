@@ -50,7 +50,10 @@ class RunShellTool @Inject constructor(
 ) : Tool {
     override val name = "run_shell"
     override val description =
-        "Run a shell command in Mythara's sandbox. Allowlisted binaries only (ls, cat, getprop, dumpsys, etc.)."
+        "Run a Linux shell command in Mythara's Android sandbox. PRIMARY path for any Linux task — " +
+            "ls/cat/grep/sed/awk/sort/find/curl/wget/ps/ss/ip/tar/chmod/mkdir/mv/cp/rm/kill/etc. " +
+            "all work via toybox + GNU. Use `sh -c '<pipeline>'` for chained commands. " +
+            "Prefer this over linux_vm for anything that doesn't need apt-installable Debian packages."
 
     override val parameters = buildJsonObject {
         put("type", "object")
@@ -123,15 +126,60 @@ class RunShellTool @Inject constructor(
     companion object {
         private const val MAX_OUT = 8_192
 
-        /** Default allowlist — read-mostly binaries for device
-         *  introspection. Destructive ops (rm, dd, chmod, kill) are
-         *  intentionally excluded. */
+        /** Default allowlist — Android's userland is a real Linux
+         *  environment (toybox + a chunk of GNU tools), and the
+         *  agent is expected to use `run_shell` as the FIRST stop
+         *  for any Linux-style command. The list below covers:
+         *
+         *  • File inspection: ls, cat, head, tail, file, stat, find,
+         *    wc, du, df, readlink, realpath, basename, dirname,
+         *    hexdump, xxd, tar, gzip, gunzip, zcat
+         *  • Text processing: grep, sed, awk, sort, uniq, tr, cut,
+         *    paste, tee, xargs, seq, printf, expr
+         *  • Process / system state: ps, top, uptime, w, kill (yes —
+         *    the agent uses it to stop runaway background jobs it
+         *    started itself), id, whoami, uname, hostname, env,
+         *    printenv, getprop, dumpsys
+         *  • Network: ping, curl, wget, ip, ifconfig, ss, netstat,
+         *    arp, route, traceroute, nslookup, host
+         *  • Android-specific: pm, am, content, settings (read-only
+         *    via `settings get`)
+         *  • Scripting glue: echo, sleep, timeout, true, false, sh,
+         *    bash, mktemp, touch
+         *  • Filesystem mutation (UNDER allowed paths only — the
+         *    cwd defaults to filesDir and the file tools enforce
+         *    the same root allowlist): mkdir, rmdir, rm, cp, mv,
+         *    ln, chmod, chown
+         *
+         *  Truly dangerous binaries (`dd` to raw devices, `mkfs`,
+         *  `mount`, `umount`, `swapon`, `swapoff`, `iptables`,
+         *  `setprop`, `reboot`, `shutdown`, `pkill -9 1`) are left
+         *  off the list — the agent should refuse and explain why. */
         private val ALLOWLIST: Set<String> = setOf(
-            "ls", "cat", "head", "tail", "grep", "find", "wc",
-            "df", "du", "pwd", "echo",
-            "getprop", "dumpsys", "pm", "am", "ip", "ping", "curl",
-            "whoami", "id", "uname", "date", "stat", "file",
-            "sh",
+            // file inspection
+            "ls", "cat", "head", "tail", "file", "stat", "find", "wc",
+            "du", "df", "pwd", "readlink", "realpath", "basename", "dirname",
+            "hexdump", "xxd", "tar", "gzip", "gunzip", "zcat",
+            // text processing
+            "grep", "egrep", "fgrep", "sed", "awk", "sort", "uniq",
+            "tr", "cut", "paste", "tee", "xargs", "seq", "printf", "expr",
+            // process / system state
+            "ps", "top", "uptime", "w", "kill", "killall",
+            "id", "whoami", "uname", "hostname", "env", "printenv",
+            "getprop", "dumpsys", "logcat",
+            // network introspection
+            "ping", "ping6", "curl", "wget", "ip", "ifconfig", "ss",
+            "netstat", "arp", "route", "traceroute", "nslookup", "host",
+            // android-specific
+            "pm", "am", "content", "settings",
+            // scripting glue
+            "echo", "sleep", "timeout", "true", "false",
+            "sh", "bash", "mktemp", "touch",
+            // safe filesystem mutation (paths still enforced by
+            // ReadFileTool / WriteFileTool style root checks via the
+            // shell's own argument resolution — agent is told in the
+            // system prompt to stay under filesDir / Downloads).
+            "mkdir", "rmdir", "rm", "cp", "mv", "ln", "chmod", "chown",
         )
     }
 }
