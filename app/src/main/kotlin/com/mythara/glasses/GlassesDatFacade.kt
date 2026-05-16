@@ -107,6 +107,18 @@ object GlassesDatFacade {
 
     fun isAvailable(): Boolean = initializedOnce
 
+    /** Force a re-initialize after a runtime permission grant
+     *  (BLUETOOTH_CONNECT). The DAT SDK builds its provider observers
+     *  during [initializeIfAvailable]; if BT_CONNECT was missing at
+     *  that point, the registration-state collector never wires up
+     *  correctly and stays at UNAVAILABLE even after the permission
+     *  flips. Calling this forces a fresh init. */
+    fun reinitialize(context: Context) {
+        initializedOnce = false
+        registrationJob?.cancel(); registrationJob = null
+        initializeIfAvailable(context)
+    }
+
     /** Idempotent SDK boot. Safe to call from Application.onCreate even
      *  before the user has installed Meta AI — registrationState will
      *  remain `AVAILABLE` until they kick off [startRegistration]. */

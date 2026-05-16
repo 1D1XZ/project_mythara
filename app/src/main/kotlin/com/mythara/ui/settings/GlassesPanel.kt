@@ -1,6 +1,10 @@
 package com.mythara.ui.settings
 
+import android.Manifest
 import android.app.Activity
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -19,10 +23,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import com.mythara.glasses.GlassesConnectionService
 import com.mythara.glasses.GlassesConnectionState
 import com.mythara.glasses.GlassesDatFacade
@@ -32,24 +40,50 @@ import com.mythara.ui.theme.MytharaColors
 /**
  * Settings panel for the Meta Display Glasses integration.
  *
- * Surfaces:
- *   - Current [GlassesConnectionState] live from the DAT façade.
- *   - "Register glasses" button — fires [GlassesDatFacade.startRegistration]
- *     which hands off to the Meta AI app. The user comes back into
- *     Mythara via the registered callback URI scheme.
- *   - "Start glasses session" button — kicks off [GlassesConnectionService]
- *     (the foreground service that holds the DAT session alive). The
- *     facade only starts the session once registration is REGISTERED.
- *   - "Unregister" button — calls [GlassesDatFacade.startUnregistration]
- *     so the user can disconnect Mythara from Meta AI.
+ * Two layers of gating sit in front of the DAT SDK lifecycle:
  *
- * Mirrors the ShizukuPanel visual style — same card, same glyph
- * conventions, state-driven body copy.
+ *  1. **BLUETOOTH_CONNECT runtime permission.** Without it the SDK can
+ *     not reach the Meta companion app even when Stella/Meta AI is
+ *     installed and the glasses are paired — registrationState stays
+ *     UNAVAILABLE indefinitely. The panel detects this and shows a
+ *     "grant Bluetooth permission" button BEFORE the state-driven
+ *     pairing flow. After grant, we force-re-init the facade so the
+ *     SDK rebuilds its provider observers.
+ *
+ *  2. **Meta companion app (Stella / Meta AI) installed AND registered.**
+ *     The DAT SDK reads registration state from that companion app. The
+ *     panel's `Initialized` branch hands off to `startRegistration` so
+ *     the companion app drives the user-facing pairing flow.
+ *
+ * After both gates are passed, the panel surfaces session controls
+ * (start/stop) for [GlassesConnectionService].
+ *
+ * Mirrors the ShizukuPanel visual style.
  */
 @Composable
 fun GlassesPanel() {
     val ctx = LocalContext.current
     val state by GlassesDatFacade.connectionState.collectAsState()
+
+    // Runtime BLUETOOTH_CONNECT (API 31+) check + request. Without
+    // this, every state path is moot — the SDK can't see anything.
+    var btGranted by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(
+                ctx, Manifest.permission.BLUETOOTH_CONNECT,
+            ) == PackageManager.PERMISSION_GRANTED,
+        )
+    }
+    val btLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        btGranted = granted
+        if (granted) {
+            // Re-initialize the SDK so it rebuilds its provider
+            // observers now that BT_CONNECT is live.
+            GlassesDatFacade.reinitialize(ctx)
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -64,6 +98,33 @@ fun GlassesPanel() {
             style = MaterialTheme.typography.labelLarge.copy(color = MytharaColors.FgMute),
         )
         Spacer(Modifier.height(6.dp))
+
+        if (!btGranted) {
+            // GATE 1 — Bluetooth permission. Show this BEFORE any
+            // DAT state because the SDK is blind without it.
+            Text(
+                text = "${Glyph.Dot} state: bluetooth permission required",
+                color = MytharaColors.Mustard,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "${Glyph.AccentBar} Mythara needs Bluetooth permission to talk to the Meta " +
+                    "companion app on your phone. The DAT SDK reports `UNAVAILABLE` until this " +
+                    "is granted, even when the glasses are physically paired.",
+                color = MytharaColors.FgDim,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = { btLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT) },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MytharaColors.Charple,
+                    contentColor = MytharaColors.Bg,
+                ),
+            ) { Text("grant bluetooth permission") }
+            return@Column
+        }
 
         val statusColor = when (state) {
             GlassesConnectionState.SessionActive -> MytharaColors.Bok
@@ -80,17 +141,27 @@ fun GlassesPanel() {
         Spacer(Modifier.height(8.dp))
 
         when (state) {
-            GlassesConnectionState.NotInitialized -> Text(
-                text = "${Glyph.AccentBar} The Meta AI app isn't installed or registration isn't available " +
-                    "yet. Install Meta AI from Google Play, sign in with your Meta account, enable " +
-                    "Developer Mode (Settings → About → tap version 5 times), then return here.",
-                color = MytharaColors.FgDim,
-                style = MaterialTheme.typography.bodySmall,
-            )
+            GlassesConnectionState.NotInitialized -> {
+                Text(
+                    text = "${Glyph.AccentBar} The Meta companion app (Stella / Meta AI) is not " +
+                        "reachable. Confirm it's installed, signed in, and the glasses appear " +
+                        "in its device list. Then tap retry.",
+                    color = MytharaColors.FgDim,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = { GlassesDatFacade.reinitialize(ctx) },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MytharaColors.Charple,
+                        contentColor = MytharaColors.Bg,
+                    ),
+                ) { Text("retry") }
+            }
             GlassesConnectionState.Initialized -> {
                 Text(
                     text = "${Glyph.AccentBar} Ready to pair Mythara with your glasses. " +
-                        "Tap below — the Meta AI app will open to walk you through registration.",
+                        "Tap below — the Meta companion app will open to walk you through registration.",
                     color = MytharaColors.FgDim,
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -107,9 +178,9 @@ fun GlassesPanel() {
             }
             GlassesConnectionState.Paired -> {
                 Text(
-                    text = "${Glyph.AccentBar} Paired with Meta AI. Start a session to wake the glasses " +
-                        "display + camera stream — Mythara will hold the session alive in the " +
-                        "background until you stop it or disconnect the glasses.",
+                    text = "${Glyph.AccentBar} Paired with the Meta companion app. Start a session " +
+                        "to wake the glasses display + camera stream — Mythara will hold the " +
+                        "session alive in the background until you stop it or disconnect the glasses.",
                     color = MytharaColors.FgDim,
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -164,13 +235,22 @@ fun GlassesPanel() {
                     ),
                 ) { Text("restart session") }
             }
-            GlassesConnectionState.Error -> Text(
-                text = "${Glyph.AccentBar} The DAT SDK reported an error during initialization. " +
-                    "Check that Meta AI is up to date and your phone has Bluetooth permission " +
-                    "granted to Mythara.",
-                color = MytharaColors.Mustard,
-                style = MaterialTheme.typography.bodySmall,
-            )
+            GlassesConnectionState.Error -> {
+                Text(
+                    text = "${Glyph.AccentBar} The DAT SDK reported an error during initialization. " +
+                        "Check that the Meta companion app is up to date.",
+                    color = MytharaColors.Mustard,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = { GlassesDatFacade.reinitialize(ctx) },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MytharaColors.Charple,
+                        contentColor = MytharaColors.Bg,
+                    ),
+                ) { Text("retry") }
+            }
         }
     }
 }
