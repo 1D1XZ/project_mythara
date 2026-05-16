@@ -95,22 +95,15 @@ class LinuxVmBridgeTool @Inject constructor(
             return ToolResult.ok(setupCard())
         }
 
-        // Early diagnostic: 127.0.0.1/localhost from inside Mythara's
-        // process is Mythara itself, NOT the Linux Terminal VM. The
-        // Linux Terminal runs in a separate crosvm with its own
-        // network namespace; the user must set host to the VM's
-        // virtio-bridge IP (visible via `ip -4 addr` inside the VM —
-        // typically 192.168.x.x). Catch the common misconfiguration
-        // early with a clear message instead of a generic
-        // "connect_refused".
-        if (cfg.host == "127.0.0.1" || cfg.host.equals("localhost", ignoreCase = true)) {
-            Log.w(TAG, "host is loopback — that's Mythara's own process, not the VM")
-            return ToolResult.fail(
-                "wrong_host: host=${cfg.host} points at Mythara itself, not the Linux VM. " +
-                    "Open the Linux Terminal, run `ip -4 addr | grep inet`, and set host to the " +
-                    "VM's IP (usually starts with 192.168.x.x) in Mythara → Settings → linux bridge.",
-            )
-        }
+        // NOTE: 127.0.0.1 IS the correct host on Android 15, but ONLY
+        // when the user has added a port-forwarding entry inside the
+        // Terminal app (Settings → Port forwarding → add port 22).
+        // The Linux Terminal VM has NO IP bridge to the Android host
+        // — it uses virtio-vsock for transport. The Terminal app's
+        // port-forwarding feature is what translates host-side TCP
+        // to vsock under the hood. Without that entry, the connect
+        // will fail with ConnectException; the agent should surface
+        // the setup card in that case.
 
         return withContext(Dispatchers.IO) {
             try {
@@ -207,11 +200,12 @@ class LinuxVmBridgeTool @Inject constructor(
             "1. On Android 15, open Settings → Developer options → 'Linux development environment' and install the Debian VM.",
             "2. Open the new Terminal app from the launcher.",
             "3. Inside the VM, run: sudo apt update && sudo apt install -y openssh-server",
-            "4. Start sshd: sudo service ssh start (or 'sudo systemctl enable --now ssh')",
-            "5. Find the VM's bridge IP: ip -4 addr | grep inet — note the address that's NOT 127.0.0.1 (usually starts with 192.168.x.x).",
-            "6. (Recommended) Generate a key: ssh-keygen -t ed25519 -f ~/mythara_key -N '' && cat ~/mythara_key.pub >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && cat ~/mythara_key",
-            "7. Open Mythara → Settings → 'linux bridge'. Set host=<the IP from step 5>, port=22, user=droid, paste the private key (BEGIN/END block) into the key field.",
-            "8. Retry this command. (Note: 127.0.0.1 will NOT work — that's Mythara's own process, not the VM.)"
+            "4. Make sshd listen on all interfaces: echo 'ListenAddress 0.0.0.0' | sudo tee -a /etc/ssh/sshd_config",
+            "5. Start sshd: sudo service ssh start (or 'sudo systemctl enable --now ssh')",
+            "6. CRITICAL — bridge VM port 22 to Android host: open the Terminal app's menu (top-left) → 'Port forwarding' → add port 22. The Linux Terminal uses vsock, NOT a TCP/IP bridge, so this port-forwarding entry is what makes the VM's sshd reachable from Android at 127.0.0.1:22.",
+            "7. (Recommended) Generate an SSH key: ssh-keygen -t ed25519 -f ~/mythara_key -N '' && cat ~/mythara_key.pub >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && cat ~/mythara_key",
+            "8. Open Mythara → Settings → 'linux bridge'. Set host=127.0.0.1, port=22, user=droid, paste the private key (BEGIN/END block) into the key field. Save.",
+            "9. Retry this command."
         ]}""".trimIndent()
 
     private fun JsonPrimitive.contentOrNull(): String? = runCatching { content }.getOrNull()
