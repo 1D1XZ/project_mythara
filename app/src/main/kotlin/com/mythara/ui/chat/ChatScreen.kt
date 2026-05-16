@@ -29,7 +29,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -612,6 +614,40 @@ private fun Transcript(
         val target = items.size + extra
         if (target > 0) listState.animateScrollToItem(target - 1)
     }
+    // Day-grouping: every chat item past today collapses into a
+    // single clickable date pill above the current day's bubbles.
+    // Only the current day is open by default; tapping a previous
+    // day's pill expands its transcript inline and closes any other
+    // open day in a single state hop. Pill colour is deterministic
+    // per ISO date — see DayPill.kt for the palette + hash math.
+    val today = remember { todayIso() }
+    val groupedByDay: Map<String, List<ChatViewModel.ChatItem>> = remember(items) {
+        items.groupBy { toIsoDay(it.tsMillis) }
+    }
+    val sortedDays = remember(groupedByDay) {
+        // Oldest first; the current day always ends the list so
+        // the timeline reads top-to-bottom (older → newer).
+        groupedByDay.keys.sortedWith(compareBy { it })
+    }
+    val pastDays = sortedDays.filter { it != today }
+    val currentDayItems = groupedByDay[today].orEmpty()
+    var expandedDay by rememberSaveable { mutableStateOf<String?>(null) }
+
+    // Brand-new-day greeting — fetched once per day from
+    // ModelRouter (cached process-wide in BrandNewDayGreeter).
+    // Only consumed when the current day has zero items.
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val greeter = remember { BrandNewDayGreeter.from(ctx) }
+    val brandNewGreeting by produceState(initialValue = greeter.current(today), key1 = today) {
+        value = greeter.fetch(today)
+    }
+
+    LaunchedEffect(items.size, streaming, thinkingVisible) {
+        val extra = (if (streamingActive) 1 else 0) + (if (thinkingVisible && !streamingActive) 1 else 0)
+        val target = items.size + extra
+        if (target > 0) listState.animateScrollToItem(target - 1)
+    }
+
     LazyColumn(
         state = listState,
         modifier = Modifier
@@ -619,43 +655,45 @@ private fun Transcript(
             .padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        items(items, key = { it.key }) { item ->
-            when (item) {
-                is ChatViewModel.ChatItem.UserText -> TextBubble(
-                    text = item.text,
-                    kind = item.kind,
-                    // Notifications appear in the chat as UserText
-                    // bubbles with kind=Notification — they're
-                    // visually right-side but they're _content_, not
-                    // user-typed. Apply music UX to those too so the
-                    // user can replay + colour-learn their words.
-                    // Pure user-typed bubbles (kind=User) stay
-                    // unstyled — the user knows their own words.
-                    musicMode = musicMode && item.kind == ChatViewModel.TextKind.Notification,
-                    onReplayMusic = { onReplayMusic(item.text) },
-                    onReinforce = { gotIt -> onReinforce(item.text, gotIt) },
+        // 1) Past-day pills, oldest first. Each pill toggles the
+        //    expandedDay state; only one can be open at a time
+        //    (tapping another auto-closes the previous).
+        for (day in pastDays) {
+            val dayItems = groupedByDay[day].orEmpty()
+            item("daypill:$day") {
+                DayPill(
+                    dayLabel = prettyDayLabel(day),
+                    iso = day,
+                    itemCount = dayItems.size,
+                    expanded = expandedDay == day,
+                    onToggle = {
+                        expandedDay = if (expandedDay == day) null else day
+                    },
                 )
-                is ChatViewModel.ChatItem.AssistantText -> TextBubble(
-                    text = item.text,
-                    kind = item.kind,
-                    // Music Mode applies to ALL agent text kinds —
-                    // Reply (regular agent answer) and Update (agent's
-                    // reaction to a notification). Both flow through
-                    // the same Turn.Finished tone playback, so both
-                    // need the same colour+replay UX.
-                    musicMode = musicMode &&
-                        (item.kind == ChatViewModel.TextKind.Reply ||
-                            item.kind == ChatViewModel.TextKind.Update),
-                    onReplayMusic = { onReplayMusic(item.text) },
-                    onReinforce = { gotIt -> onReinforce(item.text, gotIt) },
-                )
-                is ChatViewModel.ChatItem.Thought -> ThoughtBubble(item)
-                is ChatViewModel.ChatItem.Tool -> ToolCallBubble(item)
-                is ChatViewModel.ChatItem.FromOtherDevice -> FromOtherDeviceCard(item)
-                is ChatViewModel.ChatItem.LifelinePhoto -> LifelineCard(item)
-                is ChatViewModel.ChatItem.ReminderCard -> ReminderCard(item)
-                is ChatViewModel.ChatItem.PersonInteraction -> PersonInteractionCard(item)
             }
+            if (expandedDay == day) {
+                items(dayItems, key = { "${day}::${it.key}" }) { item ->
+                    RenderChatItem(item, musicMode, onReplayMusic, onReinforce)
+                }
+            }
+        }
+
+        // 2) Brand-new-day bubble — ONLY when today has zero items
+        //    (so first launch in the morning shows a friendly
+        //    blank-page state instead of an empty void). Goes
+        //    AWAY the moment the user sends their first message.
+        if (currentDayItems.isEmpty() && !streamingActive && !thinkingVisible) {
+            item("brand-new-day") {
+                BrandNewDayBubble(
+                    todayLabel = prettyDayLabel(today),
+                    greeting = brandNewGreeting,
+                )
+            }
+        }
+
+        // 3) Today's items — rendered inline, always expanded.
+        items(currentDayItems, key = { it.key }) { item ->
+            RenderChatItem(item, musicMode, onReplayMusic, onReinforce)
         }
         if (streamingActive) {
             item("streaming") {
@@ -670,6 +708,42 @@ private fun Transcript(
                 ThinkingIndicator()
             }
         }
+    }
+}
+
+/** Single-item renderer extracted so the Transcript can re-use
+ *  it for both today's inline items and the expanded-pill
+ *  scrollback of a past day. */
+@Composable
+private fun RenderChatItem(
+    item: ChatViewModel.ChatItem,
+    musicMode: Boolean,
+    onReplayMusic: (String) -> Unit,
+    onReinforce: (String, Boolean) -> Unit,
+) {
+    when (item) {
+        is ChatViewModel.ChatItem.UserText -> TextBubble(
+            text = item.text,
+            kind = item.kind,
+            musicMode = musicMode && item.kind == ChatViewModel.TextKind.Notification,
+            onReplayMusic = { onReplayMusic(item.text) },
+            onReinforce = { gotIt -> onReinforce(item.text, gotIt) },
+        )
+        is ChatViewModel.ChatItem.AssistantText -> TextBubble(
+            text = item.text,
+            kind = item.kind,
+            musicMode = musicMode &&
+                (item.kind == ChatViewModel.TextKind.Reply ||
+                    item.kind == ChatViewModel.TextKind.Update),
+            onReplayMusic = { onReplayMusic(item.text) },
+            onReinforce = { gotIt -> onReinforce(item.text, gotIt) },
+        )
+        is ChatViewModel.ChatItem.Thought -> ThoughtBubble(item)
+        is ChatViewModel.ChatItem.Tool -> ToolCallBubble(item)
+        is ChatViewModel.ChatItem.FromOtherDevice -> FromOtherDeviceCard(item)
+        is ChatViewModel.ChatItem.LifelinePhoto -> LifelineCard(item)
+        is ChatViewModel.ChatItem.ReminderCard -> ReminderCard(item)
+        is ChatViewModel.ChatItem.PersonInteraction -> PersonInteractionCard(item)
     }
 }
 

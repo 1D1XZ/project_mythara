@@ -282,14 +282,21 @@ class ChatViewModel @Inject constructor(
 
     sealed interface ChatItem {
         val key: String
+        /** Wall-clock timestamp the item belongs to. Drives the
+         *  Transcript's day-grouping — items from any day OLDER
+         *  than today collapse into a clickable date pill; only
+         *  today's items render inline by default. */
+        val tsMillis: Long
         data class UserText(
             override val key: String,
             val text: String,
+            override val tsMillis: Long,
             val kind: TextKind = TextKind.User,
         ) : ChatItem
         data class AssistantText(
             override val key: String,
             val text: String,
+            override val tsMillis: Long,
             val streaming: Boolean = false,
             val kind: TextKind = TextKind.Reply,
         ) : ChatItem
@@ -306,12 +313,13 @@ class ChatViewModel @Inject constructor(
             val role: String,                 // user | assistant
             val text: String,
             val deviceShortId: String,        // last 6 chars of the device UUID
-            val tsMillis: Long,
+            override val tsMillis: Long,
         ) : ChatItem
         /** Reasoning trace extracted from `<think>…</think>` in the model's response. */
         data class Thought(
             override val key: String,
             val text: String,
+            override val tsMillis: Long,
             val streaming: Boolean = false,
         ) : ChatItem
         data class Tool(
@@ -319,6 +327,7 @@ class ChatViewModel @Inject constructor(
             val name: String,
             val args: String,
             val state: ToolState,
+            override val tsMillis: Long,
             val output: String? = null,
             val durationMs: Long? = null,
         ) : ChatItem
@@ -341,7 +350,12 @@ class ChatViewModel @Inject constructor(
             val status: String,
             val terminal: Boolean,
             val resultText: String? = null,
-        ) : ChatItem
+        ) : ChatItem {
+            // ReminderCards anchor to their scheduled wall-clock
+            // time for day-grouping — that matches where they
+            // sort into the timeline.
+            override val tsMillis: Long get() = scheduledForMs
+        }
 
         /**
          * A camera photo from the user's life timeline, interleaved into
@@ -362,7 +376,9 @@ class ChatViewModel @Inject constructor(
             val height: Int,
             val deviceShortId: String,
             val placeLabel: String? = null,
-        ) : ChatItem
+        ) : ChatItem {
+            override val tsMillis: Long get() = takenMs
+        }
 
         /**
          * A logged interaction with a contact — a call, message, or
@@ -374,7 +390,7 @@ class ChatViewModel @Inject constructor(
             override val key: String,
             val contactName: String,
             val action: String,
-            val tsMillis: Long,
+            override val tsMillis: Long,
             val ok: Boolean,
         ) : ChatItem
     }
@@ -497,6 +513,7 @@ class ChatViewModel @Inject constructor(
                     name = turn.name,
                     args = turn.args,
                     state = ToolState.Running,
+                    tsMillis = System.currentTimeMillis(),
                 )
                 inflightTools[turn.callId] = item
                 viewModelScope.launch { rebuildItems(history.dao.listAll()) }
@@ -738,6 +755,7 @@ class ChatViewModel @Inject constructor(
                         row.tsMillis to ChatItem.UserText(
                             key = "u:${row.id}",
                             text = txt,
+                            tsMillis = row.tsMillis,
                             kind = if (isNotif) TextKind.Notification else TextKind.User,
                         ),
                     )
@@ -784,6 +802,7 @@ class ChatViewModel @Inject constructor(
                                             row.tsMillis to ChatItem.AssistantText(
                                                 key = "a:${row.id}:$idx",
                                                 text = display,
+                                                tsMillis = row.tsMillis,
                                                 kind = if (lastUserWasNotif) TextKind.Update else TextKind.Reply,
                                             ),
                                         )
@@ -792,6 +811,7 @@ class ChatViewModel @Inject constructor(
                                         row.tsMillis to ChatItem.Thought(
                                             key = "t:${row.id}:$idx",
                                             text = seg.content,
+                                            tsMillis = row.tsMillis,
                                             streaming = !seg.closed,
                                         ),
                                     )
@@ -819,6 +839,7 @@ class ChatViewModel @Inject constructor(
                             name = toolName,
                             args = "",
                             state = if (isFailure) ToolState.Failure else ToolState.Success,
+                            tsMillis = row.tsMillis,
                             output = row.content,
                         ),
                     )
