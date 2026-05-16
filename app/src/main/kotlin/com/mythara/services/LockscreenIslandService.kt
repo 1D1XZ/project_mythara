@@ -173,13 +173,30 @@ class LockscreenIslandService : Service() {
             WindowManager.LayoutParams.TYPE_SYSTEM_OVERLAY
         }
 
-        // Layout flags: pass-through touches (NOT_FOCUSABLE +
-        // NOT_TOUCH_MODAL) so we don't break scrolls / taps below;
-        // LAYOUT_NO_LIMITS so we can position above the system
-        // status-bar inset; LAYOUT_IN_SCREEN so coordinates are
-        // screen-space; SHOW_WHEN_LOCKED so the overlay attempts
-        // to render on lock screens (best-effort — see service
-        // doc for Z-order caveats).
+        // Layout flags:
+        //   - FLAG_NOT_FOCUSABLE: don't take keyboard focus
+        //   - FLAG_NOT_TOUCH_MODAL: touches OUTSIDE the overlay
+        //     window's bounds pass through to the underlying app
+        //   - FLAG_LAYOUT_NO_LIMITS / FLAG_LAYOUT_IN_SCREEN: let
+        //     us position above the system status-bar inset in
+        //     screen-space coordinates
+        //   - FLAG_SHOW_WHEN_LOCKED: best-effort render on lock
+        //     screens (see service doc for Z-order caveats)
+        //
+        // We DO want touches INSIDE the window to land on the
+        // pill — that's how the user controls the app from any
+        // foreground context. So the window is sized via
+        // MATCH_PARENT width + WRAP_CONTENT height but its
+        // touch-capturing area is gated by the pill's actual
+        // rendered footprint via the inner Box wrapper (with
+        // contentAlignment = TopCenter the empty area to the
+        // left/right of the collapsed pill is INSIDE the window
+        // bounds but Compose passes the touch to the pill, not
+        // the empty regions). Trade-off: a small "dead zone" to
+        // either side of the collapsed pill where touches don't
+        // reach the underlying app. Acceptable because the pill
+        // is small and the alternative (WRAP_CONTENT width with
+        // updateViewLayout calls every expand) is heavier.
         val flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
             WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
             WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
@@ -193,11 +210,6 @@ class LockscreenIslandService : Service() {
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL
-            // Push the overlay down by 0 — we want it at the very
-            // top of the screen so it lines up with where the
-            // in-app status bar would be. The DynamicIsland
-            // composable handles its own cutout-aware vertical
-            // centering via rememberCutoutRect().
             x = 0
             y = 0
         }
@@ -206,23 +218,29 @@ class LockscreenIslandService : Service() {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             setContent {
                 MytharaTheme {
-                    val cutout = rememberCutoutRect()
-                    // Wrap the island in a Box that fills the
-                    // overlay window's full width but only
-                    // CENTER-ALIGNS the island inside it. Without
-                    // this wrapper the ComposeView's MATCH_PARENT
-                    // width host gave the island unbounded width,
-                    // making the SpaceBetween Row spread to full
-                    // screen even with widthIn(max=140) on the
-                    // Row itself.
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .wrapContentHeight(),
-                        contentAlignment = Alignment.TopCenter,
-                    ) {
-                        DynamicIsland(cutout = cutout)
-                    }
+                    // The overlay hosts the SAME consolidated
+                    // collapsible Dynamic Island the in-app
+                    // surface uses — so tapping it from another
+                    // app's foreground (or the home screen) gives
+                    // the full control surface: rose spin,
+                    // expand-to-show-status, PTT mic, Me avatar
+                    // → launch, all the indicators. The user can
+                    // control Mythara without leaving whatever
+                    // they're currently in.
+                    com.mythara.ui.system.MytharaStatusBar(
+                        onOpenAboutMe = {
+                            // From overlay context the activity
+                            // isn't on the back stack — launch
+                            // a fresh task and let MainActivity
+                            // route to AboutMe via the deep-link
+                            // intent extra (handled by
+                            // MainActivity.handleOverlayRoute).
+                            val intent = Intent(this@LockscreenIslandService, MainActivity::class.java)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                .putExtra(EXTRA_OPEN_ROUTE, "about-me")
+                            runCatching { startActivity(intent) }
+                        },
+                    )
                 }
             }
         }
@@ -298,6 +316,11 @@ class LockscreenIslandService : Service() {
         private const val TAG = "Mythara/IslandOverlay"
         private const val CHANNEL_ID = "mythara_island_overlay"
         private const val NOTIFICATION_ID = 7711
+
+        /** Intent extra MainActivity reads to land directly on a
+         *  named route after the overlay launches it. Currently
+         *  used by the Me-avatar tap (extra = "about-me"). */
+        const val EXTRA_OPEN_ROUTE = "mythara.overlay.open_route"
 
         /** True when the user has flipped the per-app overlay
          *  toggle (Settings → Special app access → Display over

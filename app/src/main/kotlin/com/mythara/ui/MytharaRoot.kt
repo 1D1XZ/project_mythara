@@ -84,10 +84,28 @@ fun MytharaRoot(
      * (typical phone portrait) keeps the existing single-pane NavHost.
      */
     windowSize: androidx.compose.material3.windowsizeclass.WindowSizeClass? = null,
+    /**
+     * Optional initial route the Activity wants us to land on
+     * after the NavHost mounts — set by the overlay's
+     * Me-avatar / PTT taps, which call back into MainActivity
+     * with [com.mythara.services.LockscreenIslandService.EXTRA_OPEN_ROUTE].
+     * One-shot: we navigate once and then ignore further changes
+     * (the LaunchedEffect is keyed on the route string so a
+     * repeated route value still re-triggers).
+     */
+    initialRoute: String? = null,
 ) {
     val authVm: AuthViewModel = hiltViewModel()
     val authState by authVm.state.collectAsState()
     val nav = rememberNavController()
+    // Honour the activity-provided deep-link route. Runs once
+    // after composition; the NavHost destinations all live below
+    // so by the time this fires the host is mounted.
+    LaunchedEffect(initialRoute) {
+        if (!initialRoute.isNullOrBlank()) {
+            runCatching { nav.navigate(initialRoute) { launchSingleTop = true } }
+        }
+    }
 
     // First-run onboarding pivot. Sits OUTSIDE the AuthGate because
     // half the steps deep-link to system Settings (Accessibility,

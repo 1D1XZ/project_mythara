@@ -111,10 +111,21 @@ class MainActivity : FragmentActivity() {
             },
         )
 
+        // Deep-link route from the LockscreenIslandService overlay
+        // (e.g. Me-avatar tap → land on AboutMe). Mutable so an
+        // onNewIntent re-arrival can update it; rememberSaveable
+        // keeps the value across rotations until we've navigated.
         setContent {
             val windowSize = androidx.compose.material3.windowsizeclass.calculateWindowSizeClass(this)
+            // Pull the extra fresh on every recomposition so an
+            // onNewIntent that lands a new route triggers the
+            // MytharaRoot LaunchedEffect again.
+            val pendingRoute = intent?.getStringExtra(
+                com.mythara.services.LockscreenIslandService.EXTRA_OPEN_ROUTE
+            )
             MytharaRoot(
                 windowSize = windowSize,
+                initialRoute = pendingRoute,
                 onUnlockRequest = {
                     appAuth.authenticate(this, title = "Unlock Mythara") { result ->
                         when (result) {
