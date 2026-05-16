@@ -4,6 +4,9 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.os.BatteryManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -15,6 +18,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -26,6 +32,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -40,27 +47,34 @@ import java.util.Locale
 
 /**
  * Mythara's own status strip rendered at the top of every screen
- * since the system status bar is hidden in launcher mode (see
- * MainActivity's WindowInsetsController.hide call).
+ * since the system status bar is hidden in launcher mode.
  *
- * Renders the three pieces a user actually scans the system bar
- * for: clock, battery percent, charging indicator. Network signal
- * is intentionally NOT included — it'd require a phone-state
- * permission that the typical user never granted, and the live
- * wallpaper / amulet's HR pulse already gives ambient "system is
- * alive" signal.
+ * Layout (left → right):
+ *   - Clock (HH:mm, monospace-ish)
+ *   - 4 signal-strength dots (purple, glowing) — lit count tracks
+ *     network connectivity (offline → all grey; cellular without
+ *     wifi → 2-3 lit; full wifi → all 4 lit)
+ *   - MiniMax API status dot (blue glowing when online, grey when
+ *     offline / no key, red on recent error)
+ *   - Image API status dot (yellow glowing same semantics)
+ *   - Battery percent + glyph
  *
- * The strip respects the device's status-bar inset height so it
- * doesn't clip the camera notch / hole-punch on devices that have
- * one — the height comes from WindowInsets.statusBars below the
- * Box height.
+ * Respects the system status-bar inset via windowInsetsPadding so
+ * the strip never clips the camera notch / hole-punch on devices
+ * that have one. The whole strip is clipped with a rounded bottom
+ * to avoid a hard edge against the chat content beneath.
+ *
+ * Permission posture: requires only ACCESS_NETWORK_STATE (already
+ * declared). Cellular signal strength would need READ_PHONE_STATE
+ * which we don't ask for — so the dots map to "is the device
+ * connected to a network at all" rather than true tower bars.
+ * That's the high-signal info anyway: "do my API calls have a
+ * pipe to fly through?".
  */
 @Composable
 fun MytharaStatusBar(modifier: Modifier = Modifier) {
     val ctx = LocalContext.current
 
-    // Live clock — re-evaluates every 30s. Same cadence the system
-    // clock would tick at; finer doesn't help and burns battery.
     val nowFmt by produceState(initialValue = formatNow(), key1 = Unit) {
         while (true) {
             value = formatNow()
@@ -68,10 +82,6 @@ fun MytharaStatusBar(modifier: Modifier = Modifier) {
         }
     }
 
-    // Battery state — from a sticky broadcast (no permission needed,
-    // ACTION_BATTERY_CHANGED is freely subscribable). Refreshes on
-    // every state change the system pushes (~ once per minute when
-    // discharging, more often when plugged).
     var battery by remember { mutableStateOf(readBattery(ctx)) }
     DisposableEffect(ctx) {
         val receiver = object : BroadcastReceiver() {
@@ -83,20 +93,60 @@ fun MytharaStatusBar(modifier: Modifier = Modifier) {
         onDispose { runCatching { ctx.unregisterReceiver(receiver) } }
     }
 
-    // Strip itself. Height roughly matches a system status bar so
-    // existing screen layouts (which currently account for system
-    // bars via WindowInsets.systemBars) continue to look right —
-    // the strip just replaces the system pixels.
+    // Network state — fed from a ConnectivityManager.NetworkCallback
+    // so the dots update the moment connectivity flips. Also
+    // re-evaluates the API health snapshot on each connectivity
+    // change — losing wifi flips both API dots to grey instantly.
+    var network by remember { mutableStateOf(readNetwork(ctx)) }
+    DisposableEffect(ctx) {
+        val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(net: Network) { network = readNetwork(ctx) }
+            override fun onLost(net: Network) { network = readNetwork(ctx) }
+            override fun onCapabilitiesChanged(net: Network, caps: NetworkCapabilities) {
+                network = readNetwork(ctx)
+            }
+        }
+        runCatching { cm?.registerDefaultNetworkCallback(cb) }
+        onDispose { runCatching { cm?.unregisterNetworkCallback(cb) } }
+    }
+
+    // API health dots — re-poll every 2 s. The store is a volatile
+    // singleton so reads are cheap; we don't wire a flow because
+    // the renderer's already on a UI thread and the freshness
+    // doesn't need to be sub-second.
+    val minimaxHealth by produceState(initialValue = ApiStatusStore.minimax(), key1 = network) {
+        while (true) {
+            // Network gone → mark offline regardless of credential.
+            // Network back → leave to whatever the last call set
+            // (or Online if no call has happened yet).
+            if (!network.connected && ApiStatusStore.minimax() != ApiStatusStore.ApiHealth.Error) {
+                ApiStatusStore.markMinimaxOffline()
+            }
+            value = ApiStatusStore.minimax()
+            delay(2_000L)
+        }
+    }
+    val imageHealth by produceState(initialValue = ApiStatusStore.image(), key1 = network) {
+        while (true) {
+            if (!network.connected && ApiStatusStore.image() != ApiStatusStore.ApiHealth.Error) {
+                ApiStatusStore.markImageOffline()
+            }
+            value = ApiStatusStore.image()
+            delay(2_000L)
+        }
+    }
+
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(STRIP_HEIGHT_DP.dp)
+            .windowInsetsPadding(WindowInsets.statusBars)
+            .clip(RoundedCornerShape(bottomStart = 14.dp, bottomEnd = 14.dp))
             .background(MytharaColors.Bg)
-            .padding(horizontal = 14.dp, vertical = 4.dp),
+            .padding(horizontal = 14.dp, vertical = 4.dp)
+            .height(STRIP_HEIGHT_DP.dp),
     ) {
-        // Left: the clock. Anchors to the start so users always
-        // glance to the same spot — same convention as the system
-        // bar in 24-hour locales.
+        // Left: clock.
         Text(
             text = nowFmt,
             color = MytharaColors.Fg,
@@ -105,8 +155,22 @@ fun MytharaStatusBar(modifier: Modifier = Modifier) {
             modifier = Modifier.align(Alignment.CenterStart),
         )
 
-        // Right: battery percent + a tiny battery glyph that fills
-        // proportionally to the level.
+        // Centre: signal-strength dots + API status dots clustered
+        // together so the user reads "system + AI" health at one
+        // glance. Cluster centred so the layout remains balanced
+        // when the time / battery values change width.
+        Row(
+            modifier = Modifier.align(Alignment.Center),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            SignalDots(litCount = network.bars, accent = SIGNAL_COLOR)
+            Spacer(Modifier.width(2.dp))
+            HealthDot(label = "M", health = minimaxHealth, accent = MINIMAX_COLOR)
+            HealthDot(label = "I", health = imageHealth, accent = IMAGE_COLOR)
+        }
+
+        // Right: charging glyph + battery percent + glyph.
         Row(
             modifier = Modifier.align(Alignment.CenterEnd),
             verticalAlignment = Alignment.CenterVertically,
@@ -127,6 +191,64 @@ fun MytharaStatusBar(modifier: Modifier = Modifier) {
             BatteryGlyph(percent = battery.percent, charging = battery.charging)
         }
     }
+}
+
+/**
+ * Four cell-bar-style dots, lit from the left up to [litCount].
+ * Lit dots glow in [accent]; unlit dots are dim grey. A subtle
+ * shadow gives the lit ones the "neon glow" the user asked for
+ * without needing a real blur pass.
+ */
+@Composable
+private fun SignalDots(litCount: Int, accent: Color) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        repeat(SIGNAL_BAR_COUNT) { i ->
+            val lit = i < litCount
+            Dot(
+                accent = if (lit) accent else GREY,
+                glow = lit,
+                sizeDp = 5,
+            )
+        }
+    }
+}
+
+/**
+ * Single API-health dot with a glyph tag (e.g. "M" for MiniMax,
+ * "I" for Image) and a coloured circle that glows when Online,
+ * goes grey when Offline, and goes red when there's been a recent
+ * Error.
+ */
+@Composable
+private fun HealthDot(label: String, health: ApiStatusStore.ApiHealth, accent: Color) {
+    val (color, glow) = when (health) {
+        ApiStatusStore.ApiHealth.Online -> accent to true
+        ApiStatusStore.ApiHealth.Offline -> GREY to false
+        ApiStatusStore.ApiHealth.Error -> ERROR_COLOR to true
+    }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+        Text(
+            text = label,
+            color = color,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Bold,
+        )
+        Dot(accent = color, glow = glow, sizeDp = 7)
+    }
+}
+
+@Composable
+private fun Dot(accent: Color, glow: Boolean, sizeDp: Int) {
+    Box(
+        modifier = Modifier
+            .then(if (glow) Modifier.shadow(elevation = 4.dp, shape = androidx.compose.foundation.shape.CircleShape, ambientColor = accent, spotColor = accent) else Modifier)
+            .size(sizeDp.dp)
+            .clip(androidx.compose.foundation.shape.CircleShape)
+            .background(accent),
+    )
 }
 
 @Composable
@@ -151,8 +273,6 @@ private fun BatteryGlyph(percent: Int, charging: Boolean) {
                 .background(accent),
         )
     }
-    // Tiny terminal nub on the right of the body — visual cue
-    // that this is a battery glyph and not just a generic bar.
     Spacer(Modifier.width(1.dp))
     Box(
         modifier = Modifier
@@ -161,9 +281,18 @@ private fun BatteryGlyph(percent: Int, charging: Boolean) {
     )
 }
 
-/** Strip height in dp — picked to roughly match a Pixel system
- *  status bar (24-26dp) so no existing screen layout has to shift. */
 internal const val STRIP_HEIGHT_DP = 24
+private const val SIGNAL_BAR_COUNT = 4
+
+// Palette for the new status indicators. Purple for signal so it
+// reads as a Mythara accent (matches the rose petal palette).
+// Blue for MiniMax = its brand colour. Yellow = Mythara's mustard
+// accent, used for the secondary AI service.
+private val SIGNAL_COLOR = Color(0xFF9B86FF)   // lavender / Mythara purple
+private val MINIMAX_COLOR = Color(0xFF3D9CFF)  // bright cyan-blue
+private val IMAGE_COLOR = Color(0xFFFFB000)    // mustard-yellow
+private val GREY = Color(0xFF555555)
+private val ERROR_COLOR = Color(0xFFEB4268)    // red-pink, pops against dark bg
 
 private fun formatNow(): String =
     SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
@@ -182,4 +311,32 @@ private fun readBattery(ctx: Context, intent: Intent? = null): BatterySnapshot {
         status == BatteryManager.BATTERY_STATUS_CHARGING ||
         status == BatteryManager.BATTERY_STATUS_FULL
     return BatterySnapshot(percent = pct, charging = charging)
+}
+
+/** Snapshot of the device's network state for the status-bar dots.
+ *  `bars` is in [0..4]:
+ *     0 = no internet
+ *     2 = cellular validated (we don't check signal strength
+ *         without READ_PHONE_STATE so cellular always reports 2)
+ *     4 = wifi validated
+ *     3 = ethernet / other validated
+ *  Distinct from raw `connected` so the renderer can fade the
+ *  unlit dots while still acknowledging "you're online". */
+private data class NetworkSnapshot(val connected: Boolean, val bars: Int)
+
+private fun readNetwork(ctx: Context): NetworkSnapshot {
+    val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        ?: return NetworkSnapshot(connected = false, bars = 0)
+    val active = cm.activeNetwork ?: return NetworkSnapshot(connected = false, bars = 0)
+    val caps = cm.getNetworkCapabilities(active) ?: return NetworkSnapshot(connected = false, bars = 0)
+    val validated = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) &&
+        caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    if (!validated) return NetworkSnapshot(connected = false, bars = 0)
+    val bars = when {
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> 4
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> 3
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> 2
+        else -> 1
+    }
+    return NetworkSnapshot(connected = true, bars = bars)
 }

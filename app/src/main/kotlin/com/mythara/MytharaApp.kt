@@ -3,6 +3,8 @@ package com.mythara
 import android.app.Application
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.launch
 import com.mythara.agent.AutoReplyDispatcher
 import com.mythara.agent.NotificationImageIngestor
 import com.mythara.agent.queue.PendingReplyKickScheduler
@@ -46,6 +48,7 @@ import javax.inject.Inject
 class MytharaApp : Application(), Configuration.Provider {
 
     @Inject lateinit var workerFactory: HiltWorkerFactory
+    @Inject lateinit var settingsStore: com.mythara.data.SettingsStore
     @Inject lateinit var growthScheduler: GrowthScheduler
     @Inject lateinit var memorySyncScheduler: MemorySyncScheduler
     @Inject lateinit var selfOrganizerScheduler: SelfOrganizerScheduler
@@ -83,6 +86,24 @@ class MytharaApp : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
+
+        // Seed the API status dots in MytharaStatusBar based on
+        // configured credentials so the user sees blue/yellow on
+        // first launch (instead of grey-until-first-call). Decay
+        // logic in ApiStatusStore re-flips to red on a real
+        // failure or grey on connectivity loss.
+        kotlinx.coroutines.GlobalScope.launch {
+            runCatching {
+                val snap = settingsStore.snapshot()
+                if (!snap.apiKey.isNullOrBlank()) {
+                    com.mythara.ui.system.ApiStatusStore.markMinimaxOnline()
+                }
+                if (!snap.geminiKey.isNullOrBlank()) {
+                    com.mythara.ui.system.ApiStatusStore.markImageOnline()
+                }
+            }
+        }
+
         growthScheduler.start()
         memorySyncScheduler.start()
         selfOrganizerScheduler.start()

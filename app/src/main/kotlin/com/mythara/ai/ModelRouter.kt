@@ -106,12 +106,20 @@ class ModelRouter @Inject constructor(
             )
             val resp = runCatching { client.retrofit.chatCompletionText(req) }.getOrElse { e ->
                 Log.w(TAG, "cloud completion threw: ${e.message}")
+                com.mythara.ui.system.ApiStatusStore.markMinimaxError()
                 return@withContext null
             }
             if (!resp.isSuccessful) {
                 Log.w(TAG, "cloud completion http ${resp.code()} — falling back to local")
+                com.mythara.ui.system.ApiStatusStore.markMinimaxError()
                 return@withContext null
             }
+            // 2xx — flag MiniMax healthy so the status-bar dot
+            // glows blue. Decay logic in ApiStatusStore moves the
+            // dot back from red to blue automatically once 90 s
+            // pass without a fresh failure, but explicit on-success
+            // marking gets us there faster.
+            com.mythara.ui.system.ApiStatusStore.markMinimaxOnline()
             val content = resp.body()?.choices?.firstOrNull()?.message?.content
                 ?: return@withContext null
             // MiniMax M2 can embed <think> reasoning in content — strip it,

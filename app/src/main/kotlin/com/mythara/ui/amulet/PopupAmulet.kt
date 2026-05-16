@@ -196,28 +196,33 @@ fun PopupAmulet(
             }
         }
 
-        // Central rose amulet — sits at the anchor itself. Tap it
-        // to TOGGLE mode (Menu ↔ PTT). To dismiss, tap the scrim
+        // Central rose amulet — sits at the anchor itself. Tap
+        // ANYWHERE on the rose (not just the central pixel) to
+        // TOGGLE mode (Menu ↔ PTT). To dismiss, tap the scrim
         // around the amulet. Two-tap path:
         //   long-press (open) → tap rose → in PTT mode
         //   tap rose again → back in Menu mode
         // The rose always reads as "the brand mark" even when the
         // surrounding chips change function.
+        //
+        // Pass onTap into RoseAmulet directly — its internal
+        // pointerInput gesture detector (tap / long-press / swipe
+        // / triple-tap) consumes the down event before any parent
+        // .clickable could see it. So the whole 84dp amulet area
+        // is one big tap-to-toggle target.
         val amuletLeftDp = with(density) { cx.toDp() } - (amuletSizeDp / 2).dp
         val amuletTopDp = with(density) { cy.toDp() } - (amuletSizeDp / 2).dp
         Box(
             modifier = Modifier
                 .offset(x = amuletLeftDp, y = amuletTopDp)
-                .graphicsLayer { alpha = expansion.value }
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = {
-                        mode = if (mode == AmuletMode.Menu) AmuletMode.Ptt else AmuletMode.Menu
-                    },
-                ),
+                .graphicsLayer { alpha = expansion.value },
         ) {
-            RoseAmulet(modifier = Modifier.size(amuletSizeDp.dp))
+            RoseAmulet(
+                modifier = Modifier.size(amuletSizeDp.dp),
+                onTap = {
+                    mode = if (mode == AmuletMode.Menu) AmuletMode.Ptt else AmuletMode.Menu
+                },
+            )
         }
         // Mode label below the rose so the user knows what they're
         // looking at. Tiny, low-contrast so it doesn't compete with
