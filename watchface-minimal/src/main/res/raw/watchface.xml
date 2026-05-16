@@ -8,25 +8,31 @@
 
   INTERACTIVE:
     • Black background (full-frame OLED off).
-    • Mythara rose centred at canvas-upper-third — the brand mark
-      is the focal element. No rotation, no pulse.
-    • Time HH:MM in a clean digital readout below the rose. Large,
+    • Mythara rose centred at canvas-upper-third.
+    • Time HH:MM in jetbrains_mono_regular below the rose. Large,
       lavender on black for maximum contrast.
     • Compact MYTHARA wordmark below the time.
     • Two complication slots at the bottom: HR (left), battery (right).
 
   AMBIENT (AOD / power-save):
-    • Time HH:MM only, dimmer (charple instead of lavender) so it
-      doesn't dominate at night.
-    • Rose collapses to a small outline above the time. Just enough
-      brand recognition.
-    • All other elements hidden — AOD is for the time.
+    • Time HH:MM only, smaller + dimmer (charple instead of lavender)
+      so it doesn't dominate at night and OLED burn-in stays low.
+    • Rose collapses to a tiny outline above the time.
+    • All other elements hidden.
 
-  Schema notes:
-    • <TimeText> requires a child <Font> for colour/size.
-    • <ComplicationSlot> uses supportedTypes as an XML attribute
-      ("SHORT_TEXT EMPTY"), NOT a <SupportedTypes> child block.
-    • <Complication> requires type="..." matching one of those.
+  Structure follows the canonical Tactical-face pattern:
+    • Interactive elements wrapped in a <Group name="interactive">
+      with `<Variant mode="AMBIENT" target="alpha" value="0" />` —
+      proven to actually hide them in ambient (per-element Variant
+      on DigitalClock didn't take on Galaxy Watch).
+    • Ambient elements wrapped in a <Group name="ambient"> that
+      starts at alpha=0 and Variant-flips to 255 in AMBIENT mode.
+    • <TimeText> requires a child <Font family="..."> with explicit
+      family / size / weight / slant / color — flat color attributes
+      are silently ignored.
+    • <ComplicationSlot supportedTypes="..."> as XML attribute; each
+      type then has its own <Complication type="..."> block plus an
+      EMPTY fallback for unbound slots.
 -->
 <WatchFace width="450" height="450">
     <Metadata key="CLOCK_TYPE" value="DIGITAL" />
@@ -35,96 +41,93 @@
     <Scene backgroundColor="#ff000000">
 
         <!-- ============ INTERACTIVE ============ -->
-
-        <!-- Brand mark: 180×180 rose centred horizontally in the upper
-             third of the face. Hidden in ambient (a small outline below
-             takes its place). -->
-        <PartImage x="135" y="60" width="180" height="180">
+        <Group x="0" y="0" width="450" height="450" name="interactive">
             <Variant mode="AMBIENT" target="alpha" value="0" />
-            <Image resource="rose" />
-        </PartImage>
 
-        <!-- Time HH:MM — interactive variant. Large lavender. -->
-        <DigitalClock x="0" y="248" width="450" height="100">
-            <Variant mode="AMBIENT" target="alpha" value="0" />
-            <TimeText format="hh:mm" hourFormat="24" align="CENTER"
-                x="0" y="0" width="450" height="100">
-                <Font family="SYNC_TO_DEVICE" size="80" weight="NORMAL"
-                    slant="NORMAL" color="#ff9b86ff" />
-            </TimeText>
-        </DigitalClock>
+            <!-- Brand mark: 180×180 rose centred horizontally in the
+                 upper third of the face. -->
+            <PartImage x="135" y="40" width="180" height="180">
+                <Image resource="rose" />
+            </PartImage>
 
-        <!-- Brand wordmark beneath the time. Hidden in ambient. -->
-        <PartText x="0" y="360" width="450" height="22">
-            <Variant mode="AMBIENT" target="alpha" value="0" />
-            <Text align="CENTER">
-                <Font family="SYNC_TO_DEVICE" size="14" weight="NORMAL"
-                    slant="NORMAL" color="#ff8e8a95"><![CDATA[MYTHARA]]></Font>
-            </Text>
-        </PartText>
+            <!-- Time HH:MM — large lavender JetBrains Mono. -->
+            <DigitalClock x="0" y="225" width="450" height="80">
+                <TimeText format="hh:mm" hourFormat="24" align="CENTER"
+                    x="0" y="0" width="450" height="80">
+                    <Font family="jetbrains_mono_regular" size="56"
+                        weight="NORMAL" slant="NORMAL" color="#ff9b86ff" />
+                </TimeText>
+            </DigitalClock>
 
-        <!-- Complication slot 1 — bottom-left. Default: heart rate.
-             User can swap via long-press + edit. Hidden in ambient. -->
-        <ComplicationSlot slotId="1" x="50" y="385" width="100" height="50"
-            supportedTypes="SHORT_TEXT EMPTY">
-            <BoundingOval x="0" y="0" width="100" height="50" />
-            <DefaultProviderPolicy
-                defaultSystemProvider="HEART_RATE"
-                defaultSystemProviderType="SHORT_TEXT" />
-            <Complication type="SHORT_TEXT">
-                <PartText x="0" y="0" width="100" height="50">
-                    <Variant mode="AMBIENT" target="alpha" value="0" />
-                    <Text align="CENTER">
-                        <Font family="SYNC_TO_DEVICE" size="18" weight="NORMAL"
-                            slant="NORMAL" color="#ffeb4268">
-                            <Template><![CDATA[%s]]><Parameter expression="[COMPLICATION.TEXT]" /></Template>
-                        </Font>
-                    </Text>
-                </PartText>
-            </Complication>
-            <Complication type="EMPTY" />
-        </ComplicationSlot>
+            <!-- Brand wordmark beneath the time. Small, dim. -->
+            <PartText x="0" y="305" width="450" height="22">
+                <Text align="CENTER">
+                    <Font family="jetbrains_mono_regular" size="13"
+                        weight="NORMAL" slant="NORMAL"
+                        color="#ff8e8a95"><![CDATA[MYTHARA]]></Font>
+                </Text>
+            </PartText>
 
-        <!-- Complication slot 2 — bottom-right. Default: watch battery. -->
-        <ComplicationSlot slotId="2" x="300" y="385" width="100" height="50"
-            supportedTypes="SHORT_TEXT EMPTY">
-            <BoundingOval x="0" y="0" width="100" height="50" />
-            <DefaultProviderPolicy
-                defaultSystemProvider="WATCH_BATTERY"
-                defaultSystemProviderType="SHORT_TEXT" />
-            <Complication type="SHORT_TEXT">
-                <PartText x="0" y="0" width="100" height="50">
-                    <Variant mode="AMBIENT" target="alpha" value="0" />
-                    <Text align="CENTER">
-                        <Font family="SYNC_TO_DEVICE" size="18" weight="NORMAL"
-                            slant="NORMAL" color="#ff68ffd6">
-                            <Template><![CDATA[%s]]><Parameter expression="[COMPLICATION.TEXT]" /></Template>
-                        </Font>
-                    </Text>
-                </PartText>
-            </Complication>
-            <Complication type="EMPTY" />
-        </ComplicationSlot>
+            <!-- Complication slot 1 — bottom-left. Default: heart rate. -->
+            <ComplicationSlot slotId="1" x="80" y="360" width="100" height="40"
+                supportedTypes="SHORT_TEXT EMPTY">
+                <BoundingOval x="0" y="0" width="100" height="40" />
+                <DefaultProviderPolicy
+                    defaultSystemProvider="HEART_RATE"
+                    defaultSystemProviderType="SHORT_TEXT" />
+                <Complication type="SHORT_TEXT">
+                    <PartText x="0" y="0" width="100" height="40">
+                        <Text align="CENTER">
+                            <Font family="jetbrains_mono_regular" size="18"
+                                weight="NORMAL" slant="NORMAL"
+                                color="#ffeb4268">
+                                <Template><![CDATA[%s]]><Parameter expression="[COMPLICATION.TEXT]" /></Template>
+                            </Font>
+                        </Text>
+                    </PartText>
+                </Complication>
+                <Complication type="EMPTY" />
+            </ComplicationSlot>
+
+            <!-- Complication slot 2 — bottom-right. Default: watch battery. -->
+            <ComplicationSlot slotId="2" x="270" y="360" width="100" height="40"
+                supportedTypes="SHORT_TEXT EMPTY">
+                <BoundingOval x="0" y="0" width="100" height="40" />
+                <DefaultProviderPolicy
+                    defaultSystemProvider="WATCH_BATTERY"
+                    defaultSystemProviderType="SHORT_TEXT" />
+                <Complication type="SHORT_TEXT">
+                    <PartText x="0" y="0" width="100" height="40">
+                        <Text align="CENTER">
+                            <Font family="jetbrains_mono_regular" size="18"
+                                weight="NORMAL" slant="NORMAL"
+                                color="#ff68ffd6">
+                                <Template><![CDATA[%s]]><Parameter expression="[COMPLICATION.TEXT]" /></Template>
+                            </Font>
+                        </Text>
+                    </PartText>
+                </Complication>
+                <Complication type="EMPTY" />
+            </ComplicationSlot>
+        </Group>
 
         <!-- ============ AMBIENT (AOD) ============ -->
-        <!-- Everything below starts at alpha=0 (interactive); a
-             Variant flips it to 255 when ambient mode engages. -->
-
-        <!-- Tiny rose outline above the time — just enough brand
-             recognition. Same drawable, scaled down. -->
-        <PartImage x="200" y="160" width="50" height="50" alpha="0">
+        <Group x="0" y="0" width="450" height="450" name="ambient" alpha="0">
             <Variant mode="AMBIENT" target="alpha" value="255" />
-            <Image resource="rose" />
-        </PartImage>
 
-        <!-- Time HH:MM — ambient variant. Charple, smaller. -->
-        <DigitalClock x="0" y="225" width="450" height="80" alpha="0">
-            <Variant mode="AMBIENT" target="alpha" value="255" />
-            <TimeText format="hh:mm" hourFormat="24" align="CENTER"
-                x="0" y="0" width="450" height="80">
-                <Font family="SYNC_TO_DEVICE" size="64" weight="NORMAL"
-                    slant="NORMAL" color="#ff8a6fff" />
-            </TimeText>
-        </DigitalClock>
+            <!-- Tiny rose outline above the time. -->
+            <PartImage x="200" y="145" width="50" height="50">
+                <Image resource="rose" />
+            </PartImage>
+
+            <!-- Time HH:MM — charple, smaller. -->
+            <DigitalClock x="0" y="210" width="450" height="80">
+                <TimeText format="hh:mm" hourFormat="24" align="CENTER"
+                    x="0" y="0" width="450" height="80">
+                    <Font family="jetbrains_mono_regular" size="48"
+                        weight="NORMAL" slant="NORMAL" color="#ff8a6fff" />
+                </TimeText>
+            </DigitalClock>
+        </Group>
     </Scene>
 </WatchFace>
