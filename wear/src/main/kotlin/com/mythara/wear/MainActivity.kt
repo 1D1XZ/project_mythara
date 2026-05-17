@@ -71,6 +71,7 @@ import com.mythara.wear.resonance.ResonancePad
 import com.mythara.wear.resonance.ResonanceStore
 import com.mythara.wear.ui.ConstellationOverlay
 import com.mythara.wear.ui.MytharaRose
+import com.mythara.wear.ui.MytharaWordmark
 import com.mythara.wear.ui.RoseWithGlow
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.ui.input.pointer.pointerInput
@@ -583,18 +584,15 @@ private fun HomeScreen(
                     )
                 }
 
-                // MYTHARA wordmark — purple, sat just below the rose.
-                // Aligned to BottomCenter with padding so it floats
-                // independently of the rose; the rose stays centred
-                // regardless of any wordmark size changes later.
-                Text(
-                    text = "MYTHARA",
-                    color = PURPLE,
-                    fontSize = 13.sp,
-                    textAlign = TextAlign.Center,
+                // Stylised M.Y.T.H.A.R.A wordmark — purple bold letters,
+                // neon cyan dots, purple glow shadow. Anchored at the
+                // bottom-centre with padding so it stays put independent
+                // of the rose. Defined in ui/MytharaWordmark.kt.
+                MytharaWordmark(
+                    fontSize = 14.sp,
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        .padding(bottom = 26.dp),
+                        .padding(bottom = 28.dp),
                 )
             }
         }

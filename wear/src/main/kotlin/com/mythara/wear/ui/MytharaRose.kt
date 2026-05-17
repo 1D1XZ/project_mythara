@@ -83,11 +83,12 @@ private fun DrawScope.drawRose(
     // units, so the rose's visual radius is 30 source units. Scale to
     // fit comfortably inside the canvas with breathing room for the
     // optional listening ring (which sits at side*0.46 from centre).
-    // Previously this was `6.5 * (side/240)` — sized for the wallpaper's
-    // tall canvas, which made the rose overflow ~95% past the watch's
-    // 120dp Canvas bounds and visually drift around / out of view.
-    val rosePadFrac = if (showRing) 0.62f else 0.80f
-    val targetRadius = (side / 2f) * rosePadFrac
+    // FIXED scale — no per-state shrink. Previously the rose shrank
+    // (0.80 → 0.62 of half-side) when the listening ring fired, which
+    // read as the rose "drifting / floating" between idle and active.
+    // Now the rose is the same size in both states; the ring fades in
+    // around it without touching the rose itself.
+    val targetRadius = (side / 2f) * 0.72f
     val scale = targetRadius / 30f
 
     // Optional growing ring around the rose while listening — visual

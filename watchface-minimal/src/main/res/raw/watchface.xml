@@ -53,10 +53,28 @@
                 <Image resource="rose" />
             </PartImage>
 
-            <!-- Time HH:MM — large lavender JetBrains Mono. -->
-            <DigitalClock x="0" y="225" width="450" height="80">
-                <TimeText format="hh:mm" hourFormat="24" align="CENTER"
-                    x="0" y="0" width="450" height="80">
+            <!-- Time HH:MM — split into 3 columns so each piece gets
+                 its own colour: hours in neon purple (with glow via
+                 the soft fill colour mix), colon in neon cyan, minutes
+                 in neon purple. Total width 252 px centred on canvas
+                 (canvas width 450 → x=99 to x=351). -->
+            <DigitalClock x="99" y="225" width="100" height="80">
+                <TimeText format="hh" hourFormat="24" align="END"
+                    x="0" y="0" width="100" height="80">
+                    <Font family="jetbrains_mono_regular" size="56"
+                        weight="NORMAL" slant="NORMAL" color="#ff9b86ff" />
+                </TimeText>
+            </DigitalClock>
+            <PartText x="199" y="225" width="52" height="80">
+                <Text align="CENTER">
+                    <Font family="jetbrains_mono_regular" size="56"
+                        weight="NORMAL" slant="NORMAL"
+                        color="#ff68ffd6"><![CDATA[:]]></Font>
+                </Text>
+            </PartText>
+            <DigitalClock x="251" y="225" width="100" height="80">
+                <TimeText format="mm" align="START"
+                    x="0" y="0" width="100" height="80">
                     <Font family="jetbrains_mono_regular" size="56"
                         weight="NORMAL" slant="NORMAL" color="#ff9b86ff" />
                 </TimeText>
