@@ -152,12 +152,15 @@ fun LifelineCard(
 
         Column(modifier = Modifier.weight(1f)) {
             when {
+                // Full caption — no maxLines cap. The user explicitly
+                // asked to read complete generated captions in the
+                // memory / chat timeline; Gemini Flash captions are
+                // typically 1-3 sentences, so the card grows by at
+                // most a few lines.
                 !item.captionText.isNullOrBlank() -> Text(
                     text = item.captionText,
                     color = MytharaColors.Fg,
                     style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
                 )
                 item.captionStatus == "PENDING" -> Text(
                     text = "${Glyph.Ellipsis} captioning…",
@@ -184,8 +187,6 @@ fun LifelineCard(
                     text = "you added: ${item.userContext}",
                     color = MytharaColors.Mustard,
                     style = MaterialTheme.typography.labelSmall.copy(fontStyle = FontStyle.Italic),
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
                 )
             }
             // Detected-contacts chip strip — comma-joined nameKeys from

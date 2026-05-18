@@ -17,10 +17,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
@@ -83,6 +86,35 @@ fun ThinkingIndicator(
     val petalColor = lerpColor(MytharaColors.Charple, RoseGeometry.Lavender, pulse)
     val scale = 1f + 0.06f * pulse
 
+    // Continuous rotation — one revolution every SPIN_PERIOD_MS. We
+    // drive this off withFrameNanos rather than animateFloat so the
+    // angle wraps cleanly 360° → 0° without a perceptible reverse.
+    var spinDegrees by remember { mutableStateOf(0f) }
+    LaunchedEffect(Unit) {
+        val startNs = withFrameNanos { it }
+        while (true) {
+            withFrameNanos { now ->
+                val elapsedMs = (now - startNs) / 1_000_000.0
+                spinDegrees = ((elapsedMs / SPIN_PERIOD_MS.toDouble()) * 360.0 % 360.0).toFloat()
+            }
+        }
+    }
+
+    // Cycling gradient hue offset for the phrase text. Same
+    // withFrameNanos source so the brush, the rose spin, and the
+    // pulse all share the same clock and never visually desync.
+    var hueOffset by remember { mutableStateOf(0f) }
+    LaunchedEffect(Unit) {
+        val startNs = withFrameNanos { it }
+        while (true) {
+            withFrameNanos { now ->
+                val elapsedMs = (now - startNs) / 1_000_000.0
+                // Range 0..1, wraps every HUE_CYCLE_MS.
+                hueOffset = ((elapsedMs / HUE_CYCLE_MS.toDouble()) % 1.0).toFloat()
+            }
+        }
+    }
+
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -98,23 +130,28 @@ fun ThinkingIndicator(
             // sits at 30 units from centre — scale accordingly.
             val unitScale = targetRadius / RoseGeometry.OuterRadiusSourceUnits
             // Five big petals at the 5-fold rotation, blending Charple
-            // ↔ Lavender per pulse phase.
+            // ↔ Lavender per pulse phase. spinDegrees adds a global
+            // rotation so the whole rose visibly turns — one full
+            // revolution per SPIN_PERIOD_MS.
             for (deg in RoseGeometry.BigPetalAngles) {
                 drawPath(
                     path = RoseGeometry.petalPath(
                         diamond = RoseGeometry.BigPetal,
-                        angleDegrees = deg.toFloat(),
+                        angleDegrees = deg.toFloat() + spinDegrees,
                         cx = cx, cy = cy, scale = unitScale,
                     ),
                     color = petalColor.copy(alpha = 0.95f),
                 )
             }
             // Five smaller lavender petals interleaved at 36° offsets.
+            // Counter-rotate slightly for a layered "two wheels at
+            // different speeds" effect — keeps the eye engaged on
+            // longer "thinking…" stretches without being flashy.
             for (deg in RoseGeometry.SmallPetalAngles) {
                 drawPath(
                     path = RoseGeometry.petalPath(
                         diamond = RoseGeometry.SmallPetal,
-                        angleDegrees = deg.toFloat(),
+                        angleDegrees = deg.toFloat() - spinDegrees * 0.5f,
                         cx = cx, cy = cy, scale = unitScale,
                     ),
                     color = RoseGeometry.Lavender.copy(alpha = 0.85f),
@@ -128,21 +165,59 @@ fun ThinkingIndicator(
             )
         }
         Spacer(modifier = Modifier.size(8.dp))
+        // Cycling-gradient brush. We build a long colour ramp
+        // (purple → pink → red → blue → violet → yellow → loop) and
+        // shift its starting offset by hueOffset so the colour
+        // appears to "flow" across the phrase. Brush is computed
+        // every frame (cheap — six Color stops) and re-applied via
+        // TextStyle.brush.
+        val phraseBrush = remember(hueOffset) { buildCyclingBrush(hueOffset) }
         Text(
             text = phrase,
-            color = MytharaColors.FgDim,
-            style = TextStyle(fontFamily = JetBrainsMono, fontSize = 13.sp),
+            style = TextStyle(
+                fontFamily = JetBrainsMono,
+                fontSize = 13.sp,
+                brush = phraseBrush,
+            ),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(end = 4.dp),
         )
         Text(
             text = Glyph.Ellipsis,
-            color = MytharaColors.Charple.copy(alpha = 0.6f + 0.4f * pulse),
-            style = TextStyle(fontFamily = JetBrainsMono, fontSize = 13.sp),
+            style = TextStyle(
+                fontFamily = JetBrainsMono,
+                fontSize = 13.sp,
+                brush = phraseBrush,
+            ),
         )
     }
 }
+
+/** Six-colour cycling gradient — the user's spec was
+ *  "purple, pink, red, blue, violet, yellow". We rotate the colour
+ *  list by `offset` (0..1) so the gradient appears to scroll left
+ *  across the text. Each stop sits at evenly-spaced t values so the
+ *  transitions are smooth. */
+private fun buildCyclingBrush(offset: Float): Brush {
+    val palette = CYCLE_PALETTE
+    // Compute a rotated list so the starting colour shifts with
+    // the offset. The same palette is duplicated at the end so
+    // wrap-around stays continuous.
+    val shift = (offset * palette.size).toInt() % palette.size
+    val rotated = palette.drop(shift) + palette.take(shift)
+    val ramp = rotated + rotated.first()
+    return Brush.horizontalGradient(colors = ramp)
+}
+
+private val CYCLE_PALETTE = listOf(
+    Color(0xFF9B59FF), // purple
+    Color(0xFFFF6FD8), // pink
+    Color(0xFFFF4E50), // red
+    Color(0xFF4FA8FF), // blue
+    Color(0xFFB388FF), // violet
+    Color(0xFFFFE066), // yellow
+)
 
 private fun lerpColor(a: Color, b: Color, t: Float): Color {
     val tt = t.coerceIn(0f, 1f)
@@ -159,6 +234,14 @@ private const val PHRASE_INTERVAL_MS = 1_600L
  *  face's active-PTT pulse so any pulsing surface across the
  *  Mythara ecosystem reads as one rhythm. */
 private const val PULSE_PERIOD_MS = 1_250
+/** Rose-spin period. 4 s for a full revolution is slow enough to
+ *  feel meditative, fast enough to read as motion. The small
+ *  petals counter-rotate at half this rate. */
+private const val SPIN_PERIOD_MS = 4_000L
+/** Text-colour-cycle period. 6 s lets the eye land on each
+ *  individual colour for ~1 s before it shifts away — keeps the
+ *  thinking phrase visually alive without feeling frantic. */
+private const val HUE_CYCLE_MS = 6_000L
 /** Mini-rose target size. Big enough to read as a rose, small
  *  enough to sit comfortably inline next to body text. */
 private const val ROSE_SIZE_DP = 18
