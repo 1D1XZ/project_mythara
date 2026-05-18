@@ -618,6 +618,13 @@ fun SettingsScreen(
         Spacer(Modifier.height(16.dp))
         ShizukuPanel()
 
+        // AgentTerminal v4 Phase 3 — Termux bridge. Required by
+        // `termux_exec` / `termux_api` for the full GNU userland +
+        // Android platform tools. Degrades gracefully when Termux
+        // isn't installed; the agent's `run_shell` remains available.
+        Spacer(Modifier.height(16.dp))
+        TermuxSetupPanel()
+
         // Capability Expansion v3 — Meta Display Glasses pairing +
         // session control. Surfaces current DAT connection state,
         // registration button, start/stop FGS for the live session.

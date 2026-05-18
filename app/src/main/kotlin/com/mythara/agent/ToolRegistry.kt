@@ -123,6 +123,12 @@ class ToolRegistry @Inject constructor(
     // Lets the agent answer "caption that photo again" without
     // improvising via render_canvas / generate_image / spawn_agent.
     captionLifelinePhotoTool: com.mythara.agent.tools.CaptionLifelinePhotoTool,
+    // AgentTerminal v4 Phase 3 — Termux bridge for full GNU userland +
+    // Android platform features (clipboard, battery, location, camera,
+    // TTS, sensors). Both tools degrade to a structured error when
+    // Termux isn't installed; run_shell remains the fallback.
+    termuxExecTool: com.mythara.agent.tools.TermuxExecTool,
+    termuxApiTool: com.mythara.agent.tools.TermuxApiTool,
     private val mcpRegistry: com.mythara.mcp.McpRegistry,
     private val gate: ConfirmationGate,
     private val allowlist: com.mythara.data.AllowlistStore,
@@ -196,6 +202,8 @@ class ToolRegistry @Inject constructor(
         searchMemoryTool,
         dailyDigestTool,
         captionLifelinePhotoTool,
+        termuxExecTool,
+        termuxApiTool,
     )
 
     /** Native + currently-known MCP tools, merged. Recomputed on every

@@ -136,6 +136,28 @@
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions" />
 
+    <!-- Termux RUN_COMMAND — lets `termux_exec` / `termux_api` agent
+         tools send shell commands into Termux's Debian-grade userland.
+         Termux's permission is `signature`-level so the system will NOT
+         auto-grant it; the user must enable `allow-external-apps=true`
+         in `~/.termux/termux.properties` inside Termux. The
+         TermuxAvailability singleton + TermuxSetupPanel walk the user
+         through that one-time setup. When Termux isn't installed the
+         tools degrade gracefully — they return a structured error and
+         the agent's existing `run_shell` keeps working. -->
+    <uses-permission android:name="com.termux.permission.RUN_COMMAND" />
+
+    <!-- Android 11+ package visibility — required to introspect whether
+         Termux + Termux:API are installed and to dispatch the
+         RUN_COMMAND intent against `com.termux/.app.RunCommandService`.
+         Without these queries declarations, PackageManager.getPackageInfo
+         on those packages silently returns NameNotFoundException even
+         when they ARE installed. -->
+    <queries>
+        <package android:name="com.termux" />
+        <package android:name="com.termux.api" />
+    </queries>
+
     <!-- Camera + mic hardware optional (Mythara still useful without them on devices that lack one) -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
