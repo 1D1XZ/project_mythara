@@ -1,5 +1,7 @@
 package com.mythara.minimax
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.util.Base64
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
@@ -10,6 +12,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
@@ -63,16 +66,28 @@ class GeminiVisionService @Inject constructor() {
         if (!imageFile.exists() || imageFile.length() == 0L) {
             return@withContext Outcome(false, "Image file missing or empty.", "no_image")
         }
-        val bytes = runCatching { imageFile.readBytes() }.getOrElse {
-            return@withContext Outcome(false, "Couldn't read image: ${it.message}", "read_failed")
-        }
+        // Downsample on decode + re-encode as JPEG so what we send
+        // Gemini is bounded. Without this, every modern phone photo
+        // (~8 MB raw JPEG) crashed the request against the size cap
+        // and the bulk re-caption walker silently fell through to
+        // MiniMax-VL — which usually didn't have a key either, so
+        // the row was marked FAILED. Same pattern GemmaVisionService
+        // already uses; we mirror it here so the cloud path enjoys
+        // the same headroom.
+        val bytes = runCatching { downsampleToJpeg(imageFile) }.getOrElse {
+            return@withContext Outcome(false, "Couldn't decode image: ${it.message}", "decode_failed")
+        } ?: return@withContext Outcome(false, "Couldn't decode image (null bitmap).", "decode_failed")
         if (bytes.size > MAX_BYTES) {
+            // After downsampling, this should never trigger for a
+            // normal phone photo — but keep the guard as belt-and-
+            // suspenders for pathological inputs (panoramas etc.).
             return@withContext Outcome(
                 false,
-                "Image too large (${bytes.size} bytes), capped at $MAX_BYTES.",
+                "Image too large after downsample (${bytes.size} bytes), capped at $MAX_BYTES.",
                 "image_too_large",
             )
         }
+        Log.v(TAG, "downsampled ${imageFile.length()}B → ${bytes.size}B for Gemini")
         val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
         val body = GenerateContentRequest(
             contents = listOf(
@@ -240,7 +255,39 @@ class GeminiVisionService @Inject constructor() {
          */
         const val DEFAULT_MODEL = "gemini-2.5-flash"
 
-        private const val MAX_BYTES = 4 * 1024 * 1024
+        /** Post-downsample size cap. 8 MB is generous given we
+         *  downsample to MAX_LONG_EDGE_PX first — typical phone
+         *  photos land at 100-200 KB after the resize. */
+        private const val MAX_BYTES = 8 * 1024 * 1024
         private const val MAX_RESPONSE_TOKENS = 256
+
+        /** Long edge of the downsampled JPEG we send to Gemini.
+         *  Matches GemmaVisionService's choice — Gemini's vision
+         *  tokeniser works well at ≤ 1024 px on the long edge and
+         *  larger inputs waste tokens without improving the
+         *  caption noticeably. */
+        private const val MAX_LONG_EDGE_PX = 1024
+        private const val JPEG_QUALITY = 85
+    }
+
+    /** Decode the source image, downsample so the long edge is
+     *  ≤ [MAX_LONG_EDGE_PX], re-encode at [JPEG_QUALITY] JPEG. Bounds
+     *  the byte buffer we ship as inline base64 in the Gemini request. */
+    private fun downsampleToJpeg(file: File): ByteArray? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.absolutePath, bounds)
+        val srcLong = maxOf(bounds.outWidth, bounds.outHeight)
+        if (srcLong <= 0) return null
+        var sample = 1
+        while (srcLong / sample > MAX_LONG_EDGE_PX) sample *= 2
+        val opts = BitmapFactory.Options().apply {
+            inSampleSize = sample
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        }
+        val bmp = BitmapFactory.decodeFile(file.absolutePath, opts) ?: return null
+        return ByteArrayOutputStream().use { out ->
+            bmp.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)
+            out.toByteArray()
+        }
     }
 }
