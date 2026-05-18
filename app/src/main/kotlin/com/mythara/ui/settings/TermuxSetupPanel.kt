@@ -1,7 +1,10 @@
 package com.mythara.ui.settings
 
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -29,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.core.content.ContextCompat
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
@@ -140,12 +144,24 @@ fun TermuxSetupPanel(vm: TermuxSetupPanelViewModel = hiltViewModel()) {
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     var state by remember { mutableStateOf(vm.availability.state()) }
+    var runCommandGranted by remember { mutableStateOf(isRunCommandGranted(ctx)) }
     val verify by vm.verifyState.collectAsState()
+
+    // Termux declares RUN_COMMAND with protectionLevel="dangerous"
+    // — must be requested at runtime even though our manifest
+    // declares <uses-permission>. Launcher fires the system dialog;
+    // result flips runCommandGranted.
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        runCommandGranted = granted
+    }
 
     LaunchedEffect(lifecycleOwner, verify) {
         val obs = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 state = vm.availability.state()
+                runCommandGranted = isRunCommandGranted(ctx)
             }
         }
         lifecycleOwner.lifecycle.addObserver(obs)
@@ -153,6 +169,7 @@ fun TermuxSetupPanel(vm: TermuxSetupPanelViewModel = hiltViewModel()) {
         // flips to Ready / ReadyMissingApi without waiting for a
         // window resume event.
         state = vm.availability.state()
+        runCommandGranted = isRunCommandGranted(ctx)
     }
 
     Column(
@@ -204,6 +221,19 @@ fun TermuxSetupPanel(vm: TermuxSetupPanelViewModel = hiltViewModel()) {
             return@Column
         }
 
+        // Termux installed + non-Play-Store + dangerous permission
+        // NOT yet granted = the user has to tap "Allow" in the
+        // system dialog before Verify can possibly succeed. Show
+        // this gate BEFORE the verify CTA so we don't lure the
+        // user into a 12-second timeout when the real problem is
+        // one tap away.
+        if (state != TermuxAvailability.State.NotInstalled && !runCommandGranted) {
+            PermissionGateBlock(
+                onGrant = { permissionLauncher.launch(RUN_COMMAND_PERM) },
+            )
+            return@Column
+        }
+
         when (state) {
             TermuxAvailability.State.NotInstalled -> NotInstalledBlock(
                 onOpenFDroid = { openFDroid(ctx, TermuxAvailability.TERMUX_PKG) },
@@ -241,6 +271,27 @@ fun TermuxSetupPanel(vm: TermuxSetupPanelViewModel = hiltViewModel()) {
             else -> { /* idle / running — nothing extra */ }
         }
     }
+}
+
+@Composable
+private fun PermissionGateBlock(onGrant: () -> Unit) {
+    Text(
+        text = "${Glyph.AccentBar} Termux is installed but Mythara needs the " +
+            "`com.termux.permission.RUN_COMMAND` permission. Termux declares it as " +
+            "protectionLevel=dangerous so the system requires an explicit Allow tap — " +
+            "manifest declarations alone aren't enough. Tap the button below to bring up " +
+            "the system permission dialog.",
+        color = MytharaColors.FgDim,
+        style = MaterialTheme.typography.bodySmall,
+    )
+    Spacer(Modifier.height(8.dp))
+    Button(
+        onClick = onGrant,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = MytharaColors.Charple,
+            contentColor = MytharaColors.Bg,
+        ),
+    ) { Text("grant RUN_COMMAND permission") }
 }
 
 @Composable
@@ -359,6 +410,11 @@ private fun ReadyBlock(onReverify: () -> Unit) {
         }
     }
 }
+
+private const val RUN_COMMAND_PERM = "com.termux.permission.RUN_COMMAND"
+
+private fun isRunCommandGranted(ctx: android.content.Context): Boolean =
+    ContextCompat.checkSelfPermission(ctx, RUN_COMMAND_PERM) == PackageManager.PERMISSION_GRANTED
 
 /** Open the package's F-Droid page in a browser. Falls back to a
  *  no-op when no browser is installed (vanishingly rare on Android). */
