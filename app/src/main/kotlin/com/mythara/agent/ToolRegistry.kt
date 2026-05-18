@@ -119,6 +119,10 @@ class ToolRegistry @Inject constructor(
     searchMemoryTool: com.mythara.agent.tools.SearchMemoryTool,
     // Phase I — day-in-review aggregator.
     dailyDigestTool: com.mythara.agent.tools.DailyDigestTool,
+    // Phase J — lifeline photo (re-)captioning on demand.
+    // Lets the agent answer "caption that photo again" without
+    // improvising via render_canvas / generate_image / spawn_agent.
+    captionLifelinePhotoTool: com.mythara.agent.tools.CaptionLifelinePhotoTool,
     private val mcpRegistry: com.mythara.mcp.McpRegistry,
     private val gate: ConfirmationGate,
     private val allowlist: com.mythara.data.AllowlistStore,
@@ -191,6 +195,7 @@ class ToolRegistry @Inject constructor(
         searchPhotosTool,
         searchMemoryTool,
         dailyDigestTool,
+        captionLifelinePhotoTool,
     )
 
     /** Native + currently-known MCP tools, merged. Recomputed on every
