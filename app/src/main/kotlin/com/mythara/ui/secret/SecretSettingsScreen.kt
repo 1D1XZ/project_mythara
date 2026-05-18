@@ -995,6 +995,10 @@ fun SecretSettingsScreen(
 
         Spacer(Modifier.height(14.dp))
 
+        ReorganizeMemoryPanel(vm = vm)
+
+        Spacer(Modifier.height(14.dp))
+
         Panel("danger zone") {
             Text(
                 text = "forget everything wipes Observe scratch + the learning journal. " +
@@ -1376,6 +1380,104 @@ private fun ObserveLivePanel(
 }
 
 /**
+ * "Reorganize memory" — Settings button + live progress for the
+ * MemoryReorganizer pass. After completion, the runner kicks an
+ * immediate HeartbeatSyncer.fireNow() so the retagged rows ship to
+ * every paired Mythara device, which makes "ask the same question
+ * on the other phone" produce the same memory hits.
+ */
+@Composable
+private fun ReorganizeMemoryPanel(vm: SecretSettingsViewModel) {
+    val state by vm.reorganizeState.collectAsState()
+    Panel("reorganize memory") {
+        when (val s = state) {
+            is com.mythara.memory.MemoryReorganizerRunner.State.Idle -> {
+                Text(
+                    text = "Re-tags every \"remember\" fact in your vault with the right contact / " +
+                        "place / app facets based on your CURRENT contact list + aliases + " +
+                        "lifeline places. New aliases you added today get applied retroactively " +
+                        "to months-old notes. Everything new syncs to your other devices " +
+                        "immediately — ask the same question over there + get the same hits.",
+                    color = MytharaColors.FgDim,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Spacer(Modifier.height(10.dp))
+                Button(
+                    onClick = { vm.startReorganizeMemory() },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MytharaColors.Charple, contentColor = MytharaColors.Fg,
+                    ),
+                ) { Text("${Glyph.Arrow} reorganize now") }
+            }
+            is com.mythara.memory.MemoryReorganizerRunner.State.Running -> {
+                val frac = if (s.total > 0) s.attempted / s.total.toFloat() else 0f
+                Text(
+                    text = "${Glyph.Ellipsis} scanning ${s.attempted} of ${s.total} · " +
+                        "${s.retagged} row${if (s.retagged == 1) "" else "s"} retagged",
+                    color = MytharaColors.Citron,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.height(8.dp))
+                LinearProgressIndicator(
+                    progress = { frac.coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MytharaColors.Charple,
+                    trackColor = MytharaColors.SurfaceHigh,
+                )
+                Spacer(Modifier.height(8.dp))
+                TextButton(onClick = { vm.cancelReorganizeMemory() }) {
+                    Text("${Glyph.Cross} cancel", color = MytharaColors.Sriracha)
+                }
+            }
+            is com.mythara.memory.MemoryReorganizerRunner.State.Done -> {
+                val r = s.report
+                Text(
+                    text = "${Glyph.Check} reorganized ${r.rowsRetagged} of ${r.rowsScanned} rows " +
+                        "in ${"%.1f".format(r.durationMs / 1000.0)} s · " +
+                        "+${r.contactFacetsAdded} contact tag${if (r.contactFacetsAdded == 1) "" else "s"} · " +
+                        "+${r.placeFacetsAdded} place tag${if (r.placeFacetsAdded == 1) "" else "s"}",
+                    color = MytharaColors.Julep,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "${Glyph.AccentBar} pushed to your other Mythara devices via the heartbeat sync.",
+                    color = MytharaColors.FgDim,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Spacer(Modifier.height(8.dp))
+                Row {
+                    TextButton(onClick = { vm.acknowledgeReorganizeMemory() }) {
+                        Text("dismiss", color = MytharaColors.FgMute)
+                    }
+                    Spacer(Modifier.size(8.dp))
+                    TextButton(onClick = { vm.startReorganizeMemory() }) {
+                        Text("${Glyph.Arrow} run again", color = MytharaColors.Charple)
+                    }
+                }
+            }
+            is com.mythara.memory.MemoryReorganizerRunner.State.Failed -> {
+                Text(
+                    text = "${Glyph.Cross} ${s.message}",
+                    color = MytharaColors.Sriracha,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.height(8.dp))
+                Row {
+                    TextButton(onClick = { vm.acknowledgeReorganizeMemory() }) {
+                        Text("dismiss", color = MytharaColors.FgMute)
+                    }
+                    Spacer(Modifier.size(8.dp))
+                    TextButton(onClick = { vm.startReorganizeMemory() }) {
+                        Text("${Glyph.Arrow} retry", color = MytharaColors.Charple)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
  * "Re-caption all old photos" — kicks off a background sweep that
  * resets every locally-captured Lifeline row back to PENDING and
  * runs the full vision cascade (Gemini Flash by default, MiniMax-VL
@@ -1469,3 +1571,4 @@ private fun RecaptionAllPanel(vm: SecretSettingsViewModel) {
         }
     }
 }
+

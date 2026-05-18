@@ -64,7 +64,17 @@ class SecretSettingsViewModel @Inject constructor(
     private val resonanceLoop: ResonanceLoop,
     private val resonanceController: ResonanceController,
     private val recaptionAllRunner: com.mythara.lifeline.RecaptionAllRunner,
+    private val memoryReorganizerRunner: com.mythara.memory.MemoryReorganizerRunner,
 ) : ViewModel() {
+
+    /** State of the bulk "reorganize memory" pass — drives the
+     *  Settings panel's button + progress / done card. */
+    val reorganizeState: StateFlow<com.mythara.memory.MemoryReorganizerRunner.State>
+        get() = memoryReorganizerRunner.state
+
+    fun startReorganizeMemory() = memoryReorganizerRunner.start()
+    fun cancelReorganizeMemory() = memoryReorganizerRunner.cancel()
+    fun acknowledgeReorganizeMemory() = memoryReorganizerRunner.acknowledge()
 
     /** Direct StateFlow exposure of the bulk-recaption runner so the
      *  SecretSettings panel can drive a progress bar without us

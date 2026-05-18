@@ -115,7 +115,15 @@ class CrossAppPersonObserver @Inject constructor(
         if (nameKey.isBlank()) return
 
         val now = System.currentTimeMillis()
+        // Direct key match first; if that misses, scan the aliases
+        // column so a notification from "Rose" merges into the
+        // contact whose canonical name_key is `roselyn-mathew` but
+        // who has "Rose" in their user-curated alias list. Falling
+        // back to alias lookup before creating a brand-new row is
+        // what makes user-added aliases functionally useful across
+        // apps.
         val existing = repo.dao.byKey(nameKey)
+            ?: findExistingByAlias(senderName)
         val appLabel = appLabelFor(r.packageName)
 
         if (existing == null) {
@@ -161,6 +169,11 @@ class CrossAppPersonObserver @Inject constructor(
         // contact-analytics builder finds them when rebuilding
         // this person's profile.
         val body = (r.text ?: "").take(200)
+        // Prefer the canonical nameKey we ended up writing to on the
+        // contact row — that way an alias-matched merge stamps the
+        // behaviour-event with the same key the analytics builder
+        // later queries by.
+        val canonicalKey = existing?.nameKey ?: nameKey
         runCatching {
             vault.add(
                 content = "[$appLabel] $senderName: $body",
@@ -169,13 +182,38 @@ class CrossAppPersonObserver @Inject constructor(
                 facets = listOf(
                     BehaviorEventStore.FACET_KIND,
                     "behavior:cross-app-msg",
-                    "contact:$nameKey",
+                    "contact:$canonicalKey",
                     "app:${r.packageName}",
                     if (isGroup) "channel:group" else "channel:direct",
                 ),
                 conf = 0.85,
             )
         }
+    }
+
+    /** Scan the contact-profile aliases column for a row whose
+     *  alias list contains [senderName] (case-insensitive). Returns
+     *  the strongest candidate (highest messageCount) or null when
+     *  no alias matches. Bounded by the DAO's LIMIT 10 + an in-
+     *  memory exact-match filter so a "Sam" notification doesn't
+     *  spuriously merge into a contact whose alias contains
+     *  "Sample" or "Samuel". */
+    private suspend fun findExistingByAlias(senderName: String): ContactProfileRow? {
+        val trimmed = senderName.trim()
+        if (trimmed.length < 2) return null
+        val candidates = runCatching {
+            // The LIKE substring search is cheap; we re-verify the
+            // exact alias in JVM so partial-word collisions don't
+            // bleed across contacts.
+            repo.dao.findByAliasContaining(trimmed)
+        }.getOrDefault(emptyList())
+        if (candidates.isEmpty()) return null
+        for (row in candidates) {
+            val aliases = runCatching { decodeList(row.aliasesJson) }.getOrDefault(emptyList())
+            val hit = aliases.any { it.trim().equals(trimmed, ignoreCase = true) }
+            if (hit) return row
+        }
+        return null
     }
 
     /**

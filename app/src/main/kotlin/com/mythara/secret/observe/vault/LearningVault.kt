@@ -134,6 +134,30 @@ class LearningVault @Inject constructor(
     }.getOrDefault(emptyList())
 
     /**
+     * Append new facets onto an existing row WITHOUT touching content
+     * or embedding, and flip `synced=false` so the next MemorySync
+     * pushes the updated facet list to every paired device. Used by
+     * [com.mythara.memory.MemoryReorganizer] to retro-tag user-stated
+     * rows with `contact:<key>` / `target:contact:<key>` once the user
+     * has bound aliases / added new contacts that match older notes.
+     *
+     * Idempotent — duplicates are de-duped. Returns true when the
+     * row's facet list actually changed.
+     */
+    suspend fun mergeFacets(entity: LearningEntity, newFacets: List<String>): Boolean {
+        val existing = decodeFacets(entity)
+        val merged = (existing + newFacets).distinct()
+        if (merged.size == existing.size && merged.containsAll(existing)) return false
+        val updated = entity.copy(
+            facets = json.encodeToString(facetSerializer, merged),
+            synced = false,
+            syncedAtMs = null,
+        )
+        dao.update(updated)
+        return true
+    }
+
+    /**
      * Translate a [LearningEntity] into the GitHub-bound wire format. The
      * embedding rides along as base64 of the LE-float32 bytes.
      *

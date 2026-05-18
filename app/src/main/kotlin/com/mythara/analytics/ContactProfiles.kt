@@ -163,6 +163,23 @@ interface ContactProfileDao {
     @Query("SELECT * FROM contact_profiles WHERE name_key = :key LIMIT 1")
     suspend fun byKey(key: String): ContactProfileRow?
 
+    /** Substring scan of the JSON aliases column. Used by the
+     *  cross-app person matcher to find the canonical contact for
+     *  an incoming sender name when the direct name-key lookup
+     *  missed (e.g. notification says "Rose" but the canonical
+     *  contact is `roselyn-mathew` with "Rose" in its aliases).
+     *  Caller is responsible for filtering false positives by
+     *  re-checking the JSON list. */
+    @Query(
+        """
+        SELECT * FROM contact_profiles
+        WHERE aliases_json LIKE '%' || :needle || '%'
+        ORDER BY message_count DESC
+        LIMIT 10
+        """,
+    )
+    suspend fun findByAliasContaining(needle: String): List<ContactProfileRow>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(row: ContactProfileRow)
 
