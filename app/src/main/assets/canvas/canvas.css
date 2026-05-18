@@ -1,0 +1,115 @@
+/*
+ * Mythara theme overrides for the Canvas surface.
+ *
+ * Layers on top of Tailwind + DaisyUI:
+ *   - Pins the brand palette (Charple / Bok / Lavender / dark base)
+ *     as CSS custom properties so Tailwind utilities like
+ *     `text-charple` / `bg-bok/20` resolve via Tailwind's arbitrary-
+ *     value syntax + colours.
+ *   - Forces the body to a dark base so accidental light renders
+ *     don't blast the user on AMOLED.
+ *   - Sets JetBrainsMono as the default monospace + adds it as the
+ *     base font for `font-mono` utility class.
+ *
+ * Loaded by every `template: "tailwind"` or `template: "preact-
+ * tailwind"` render. Agents writing raw `template: "blank"` skip
+ * this and own their own styles.
+ */
+
+:root {
+  /* Mythara brand colours — same hex values as MytharaColors.kt
+     so anything the agent renders matches the wallpaper / app
+     chrome / spine. */
+  --mythara-bg:        #1B1A22;
+  --mythara-surface:   #26252E;
+  --mythara-surface-mid: #3A3943;
+  --mythara-surface-hi:  #4E4D58;
+  --mythara-fg:        #E8E6F0;
+  --mythara-fg-mute:   #A8A4AB;
+  --mythara-fg-dim:    #605F6B;
+  --mythara-charple:   #6B50FF;
+  --mythara-bok:       #68FFD6;
+  --mythara-lavender:  #9B86FF;
+  --mythara-julep:     #00FFB2;
+  --mythara-citron:    #E8FF27;
+  --mythara-mustard:   #F5EF34;
+  --mythara-malibu:    #00A4FF;
+  --mythara-sriracha:  #EB4268;
+}
+
+html, body {
+  background: var(--mythara-bg);
+  color: var(--mythara-fg);
+  font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+}
+
+/* DaisyUI `data-theme="mythara"` override. Picks our brand
+   palette into DaisyUI's named slots so `btn-primary`,
+   `bg-base-200`, `text-secondary` etc. all resolve to brand. */
+[data-theme="mythara"] {
+  --p: 49.12% 0.3096 275.75;        /* primary (Charple-ish) */
+  --pc: 100% 0 0;                    /* primary content (white text) */
+  --s: 80% 0.18 165;                 /* secondary (Bok-ish) */
+  --sc: 15% 0 0;                     /* secondary content */
+  --a: 78% 0.15 290;                 /* accent (Lavender-ish) */
+  --ac: 100% 0 0;                    /* accent content */
+  --n: 30% 0.02 280;                 /* neutral */
+  --nc: 95% 0.02 280;
+  --b1: 14% 0.02 280;                /* base-100 (Bg) */
+  --b2: 18% 0.02 280;                /* base-200 (Surface) */
+  --b3: 23% 0.02 280;                /* base-300 (SurfaceMid) */
+  --bc: 92% 0.02 280;                /* base content */
+  --in: 70% 0.18 230;                /* info */
+  --su: 75% 0.15 165;                /* success */
+  --wa: 85% 0.20 90;                 /* warning */
+  --er: 70% 0.22 22;                 /* error */
+}
+
+/* Render-area helpers — anything the agent puts inside
+   <div class="mythara-stage">…</div> gets sensible
+   padding + max-width so cards don't bleed edge-to-edge. */
+.mythara-stage {
+  padding: 16px;
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+/* Common card pattern used by RenderCanvasTool's default
+   skeleton when no DaisyUI class is specified. */
+.mythara-card {
+  background: var(--mythara-surface);
+  border: 1px solid var(--mythara-surface-hi);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 12px;
+}
+
+/* Title row at the top of a card. */
+.mythara-card-title {
+  color: var(--mythara-charple);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+  text-transform: lowercase;
+}
+
+/* Brand accents as utility classes — Tailwind utilities
+   `bg-mythara-charple` etc. don't resolve via Play CDN since
+   they're not the default palette. These shorthands give the
+   agent a stable name. */
+.bg-charple { background-color: var(--mythara-charple); }
+.bg-bok     { background-color: var(--mythara-bok); }
+.bg-lavender{ background-color: var(--mythara-lavender); }
+.bg-surface { background-color: var(--mythara-surface); }
+.text-charple  { color: var(--mythara-charple); }
+.text-bok      { color: var(--mythara-bok); }
+.text-lavender { color: var(--mythara-lavender); }
+.text-mute     { color: var(--mythara-fg-mute); }
+.text-dim      { color: var(--mythara-fg-dim); }
+.border-charple { border-color: var(--mythara-charple); }
+.border-bok     { border-color: var(--mythara-bok); }
+.border-surface-hi { border-color: var(--mythara-surface-hi); }
