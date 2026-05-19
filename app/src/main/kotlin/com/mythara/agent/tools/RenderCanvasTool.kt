@@ -306,28 +306,47 @@ class RenderCanvasTool @Inject constructor(
           ? document.querySelector(selector)
           : selector;
         if (!host) throw new Error('mythara.three.boot: host not found: ' + selector);
-        const w = opts.width  ?? host.clientWidth  ?? window.innerWidth;
-        const h = opts.height ?? host.clientHeight ?? window.innerHeight;
+        // Use `||` (not `??`) for the size fallback chain because
+        // `clientWidth === 0` is FALSY but NOT nullish — `??` would
+        // accept 0 and create a 0x0 invisible canvas. Falsy fallback
+        // walks through opts → host → viewport correctly.
+        const w = (opts.width || host.clientWidth || window.innerWidth) | 0;
+        const h = (opts.height || host.clientHeight || window.innerHeight) | 0;
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(opts.bg ?? 0x1B1A22);
         const camera = new THREE.PerspectiveCamera(
-          opts.fov ?? 60, w / h, opts.near ?? 0.1, opts.far ?? 1000,
+          opts.fov ?? 60, Math.max(w, 1) / Math.max(h, 1), opts.near ?? 0.1, opts.far ?? 1000,
         );
         camera.position.set(...(opts.cameraPos ?? [0, 0, 5]));
         const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
         renderer.setPixelRatio(window.devicePixelRatio || 1);
         renderer.setSize(w, h, false);
         renderer.setClearColor(opts.bg ?? 0x1B1A22);
+        // Force the canvas DOM element to fill its host. Without
+        // these inline styles, the renderer.domElement comes with
+        // no CSS and can collapse to 0 height inside a flex/grid
+        // parent. The absolute positioning anchors it to the host's
+        // edges so layout shifts don't shrink it.
+        renderer.domElement.style.cssText =
+          'display:block;width:100%;height:100%;position:absolute;inset:0;';
+        if (getComputedStyle(host).position === 'static') {
+          host.style.position = 'relative';
+        }
         host.appendChild(renderer.domElement);
-        // Resize on viewport changes.
+        // Resize on viewport changes AND defer one resize a frame
+        // after mount — if boot() ran during initial layout
+        // (host.clientWidth was 0), the viewport fallback got us
+        // going; this catches up to the real host size once the
+        // browser settles layout (especially after Preact mounts).
         const onResize = () => {
           const nw = host.clientWidth || window.innerWidth;
           const nh = host.clientHeight || window.innerHeight;
-          camera.aspect = nw / nh;
+          camera.aspect = Math.max(nw, 1) / Math.max(nh, 1);
           camera.updateProjectionMatrix();
           renderer.setSize(nw, nh, false);
         };
         window.addEventListener('resize', onResize);
+        requestAnimationFrame(() => requestAnimationFrame(onResize));
         return { scene, camera, renderer, dispose() {
           window.removeEventListener('resize', onResize);
           renderer.dispose();
@@ -349,11 +368,18 @@ class RenderCanvasTool @Inject constructor(
         //      Preact takes over and replaces children.
         // The wrapper class still drives the dark background +
         // safe-area inset styling from canvas.css.
-        append("""</head>
-<body class="bg-mythara-bg text-mythara-fg">
-  <div class="mythara-stage">
-    <div id="root" class="w-full h-full">
-""")
+        // Body class — webgl templates need full-bleed layout
+        // (no 720px max-width, no centered card padding). The
+        // `webgl-mode` class in canvas.css overrides the default
+        // .mythara-stage centering for these renders.
+        val bodyClasses = buildString {
+            append("bg-mythara-bg text-mythara-fg")
+            if (withThree) append(" webgl-mode")
+        }
+        append("</head>\n")
+        append("<body class=\"$bodyClasses\">\n")
+        append("  <div class=\"mythara-stage\">\n")
+        append("    <div id=\"root\" class=\"w-full h-full\">\n")
         append(body)
         append("""    </div>
   </div>

@@ -77,6 +77,30 @@ html, body {
   margin: 0 auto;
 }
 
+/* WebGL renders need full-bleed, no centering, no max-width.
+   When the wrapper marks the body with `webgl-mode`, override
+   the default card-friendly stage so Three.js's renderer DOM
+   element has the entire viewport to fill. Without this the
+   stage is 720px wide + auto height, the #root is 0 px tall,
+   and the renderer creates a 0x0 canvas that's invisible. */
+body.webgl-mode {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+body.webgl-mode .mythara-stage {
+  padding: 0;
+  margin: 0;
+  max-width: none;
+  width: 100vw;
+  height: 100vh;
+}
+body.webgl-mode #root {
+  width: 100vw;
+  height: 100vh;
+  display: block;
+}
+
 /* Common card pattern used by RenderCanvasTool's default
    skeleton when no DaisyUI class is specified. */
 .mythara-card {
