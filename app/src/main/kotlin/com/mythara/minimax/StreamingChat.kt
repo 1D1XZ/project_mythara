@@ -91,7 +91,16 @@ class StreamingChat(private val client: MiniMaxClient) {
                 choice.delta.toolCalls?.forEach { td ->
                     val acc = toolBuf.getOrPut(td.index) { ToolCallAccumulator() }
                     td.id?.let { acc.id = it }
-                    td.type?.let { acc.type = it }
+                    // ONLY override the accumulator's type with a NON-BLANK
+                    // value. MiniMax sends type ("function") on the first
+                    // delta, but later argument-fragment deltas often carry
+                    // type="" (empty string, NOT null) — a naive `?.let`
+                    // overwrites "function" with "". That poisoned
+                    // ToolCall(type="") is echoed back in assistant history
+                    // next turn → MiniMax 400s "invalid tool type (2013)"
+                    // → the whole conversation wedges ("not processing any
+                    // data"). Guarding on isNotBlank() is the fix.
+                    td.type?.takeIf { it.isNotBlank() }?.let { acc.type = it }
                     td.function?.name?.let { acc.name = it }
                     td.function?.arguments?.let { acc.args.append(it) }
                     Log.d(TAG, "tool delta idx=${td.index} name=${acc.name} argsLen=${acc.args.length}")
@@ -119,6 +128,14 @@ class StreamingChat(private val client: MiniMaxClient) {
                 val status = response?.code ?: 0
                 val errBody = response?.body?.string()
                 Log.e(TAG, "SSE failure http=$status err=${t?.message} body=${errBody?.take(300)}")
+                // On a client error (4xx), dump the OUTGOING request body
+                // so any malformed-payload bug is diagnosable from logcat
+                // without guessing. Truncated to keep the log sane; this
+                // is the request WE sent, not user secrets (the API key
+                // is a header, not in the body).
+                if (status in 400..499) {
+                    Log.e(TAG, "4xx request body (first 2KB): ${bodyJson.take(2048)}")
+                }
                 val mapped = ErrorMapper.fromHttp(status, errBody)
                 trySend(StreamEvent.Failure(mapped))
                 close()
@@ -137,7 +154,10 @@ class StreamingChat(private val client: MiniMaxClient) {
     ) {
         fun toToolCall(): ToolCall? = if (name.isEmpty()) null else ToolCall(
             id = id.ifEmpty { "call_${name}_${System.nanoTime()}" },
-            type = type,
+            // Belt-and-suspenders: never emit a blank type even if the
+            // delta guard above somehow missed (defends the round-trip
+            // against the (2013) "invalid tool type" 400).
+            type = type.ifBlank { "function" },
             function = ToolCallFunction(name = name, arguments = args.toString()),
         )
     }

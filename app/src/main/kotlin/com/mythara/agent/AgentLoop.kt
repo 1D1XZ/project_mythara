@@ -1394,6 +1394,13 @@ class AgentLoop @Inject constructor(
     private fun decodeToolCalls(s: String): List<ToolCall>? =
         runCatching { MiniMaxClient.json.decodeFromString(ListSerializer(ToolCall.serializer()), s) }
             .getOrNull()
+            // SELF-HEAL poisoned history: older turns may have persisted a
+            // tool_call with type="" (the StreamingChat accumulator bug,
+            // now fixed). Replaying such a row would 400 MiniMax with
+            // "invalid tool type (2013)" forever. Coerce any blank type
+            // back to "function" on read so an already-wedged conversation
+            // recovers without a manual history wipe.
+            ?.map { tc -> if (tc.type.isBlank()) tc.copy(type = "function") else tc }
 
     companion object {
         private const val TAG = "Mythara/Agent"
