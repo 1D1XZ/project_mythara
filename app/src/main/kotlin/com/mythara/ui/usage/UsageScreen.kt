@@ -432,9 +432,9 @@ private fun pct(used: Long, total: Long): Float {
  *  interval+weekly drives the card border so the user catches the
  *  more-pressing constraint at a glance. */
 private fun colorForPct(p: Float): Color = when {
-    p >= 0.90f -> MytharaColors.Charple
-    p >= 0.60f -> MytharaColors.Mustard
-    else -> MytharaColors.Bok
+    p >= 0.90f -> com.mythara.ui.theme.MytharaColorsStatic.Charple
+    p >= 0.60f -> com.mythara.ui.theme.MytharaColorsStatic.Mustard
+    else -> com.mythara.ui.theme.MytharaColorsStatic.Bok
 }
 
 /** Format the `remains_time` value (seconds) as "Xh Ym" / "Xd Yh". */

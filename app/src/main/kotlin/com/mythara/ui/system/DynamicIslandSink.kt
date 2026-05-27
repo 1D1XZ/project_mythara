@@ -35,7 +35,7 @@ object DynamicIslandSink {
      *  reverts to idle. */
     data class Insight(
         val text: String,
-        val accent: Color = MytharaColors.Charple,
+        val accent: Color = com.mythara.ui.theme.MytharaColorsStatic.Charple,
         val ttlMs: Long = 5_000L,
         val createdAtMs: Long = System.currentTimeMillis(),
     ) {
@@ -54,7 +54,7 @@ object DynamicIslandSink {
     }
 
     /** Convenience for the most-common shape. */
-    fun push(text: String, accent: Color = MytharaColors.Charple, ttlMs: Long = 5_000L) {
+    fun push(text: String, accent: Color = com.mythara.ui.theme.MytharaColorsStatic.Charple, ttlMs: Long = 5_000L) {
         push(Insight(text = text, accent = accent, ttlMs = ttlMs))
     }
 

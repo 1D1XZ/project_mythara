@@ -228,7 +228,7 @@ fun PopupAmulet(
         ) {
             val baseAlpha = expansion.value
             if (baseAlpha < 0.01f) return@Canvas
-            val particleColor = MytharaColors.Charple
+            val particleColor = com.mythara.ui.theme.MytharaColorsStatic.Charple
 
             // ─── Link lines + particles ───
             chipCenters.forEachIndexed { i, chipCenter ->

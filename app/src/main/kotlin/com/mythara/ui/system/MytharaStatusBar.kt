@@ -824,7 +824,7 @@ private fun CircularBatteryIcon(percent: Int, charging: Boolean) {
             )
             // Background ring — full circle, dim.
             drawArc(
-                color = MytharaColors.SurfaceHigh,
+                color = com.mythara.ui.theme.MytharaColorsStatic.SurfaceHigh,
                 startAngle = -90f,
                 sweepAngle = 360f,
                 useCenter = false,

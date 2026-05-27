@@ -2,44 +2,98 @@ package com.mythara.ui.theme
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
+import com.mythara.data.BrightnessMode
+import com.mythara.data.ThemeStore
+import dagger.hilt.EntryPoint
+import dagger.hilt.InstallIn
+import dagger.hilt.android.EntryPointAccessors
+import dagger.hilt.components.SingletonComponent
 
 /**
- * The single MaterialTheme wrapper. Mythara is dark-only — Crush is dark-only
- * — so we don't expose a light variant. If we ever need one, branch on
- * `isSystemInDarkTheme()` here; for now, force dark always.
- *
- * Material 3 colour roles are mapped to the Charmtone palette. The role
- * mapping is deliberate (not just "primary = brand") so default Material
- * components render in a way that's coherent with the hand-styled
- * Crush surfaces (composer, tool-call bubble, wordmark).
+ * Hilt EntryPoint so [MytharaTheme] — a plain @Composable called from
+ * an Activity AND a Service (LockscreenIslandService) — can reach the
+ * singleton [ThemeStore] without hiltViewModel() (unavailable in a
+ * Service compose host).
  */
-private val MytharaColorScheme = darkColorScheme(
-    primary             = MytharaColors.Charple,
-    onPrimary           = MytharaColors.Fg,
-    secondary           = MytharaColors.Bok,
-    onSecondary         = MytharaColors.Bg,
-    tertiary            = MytharaColors.Malibu,
-    background          = MytharaColors.Bg,
-    onBackground        = MytharaColors.Fg,
-    surface             = MytharaColors.Surface,
-    onSurface           = MytharaColors.Fg,
-    surfaceVariant      = MytharaColors.SurfaceMid,
-    onSurfaceVariant    = MytharaColors.FgMute,
-    outline             = MytharaColors.SurfaceHigh,
-    outlineVariant      = MytharaColors.SurfaceMid,
-    error               = MytharaColors.Sriracha,
-    onError             = MytharaColors.Fg,
-)
+@EntryPoint
+@InstallIn(SingletonComponent::class)
+interface ThemeStoreEntryPoint {
+    fun themeStore(): ThemeStore
+}
 
+/**
+ * The single MaterialTheme wrapper, now skin + brightness aware.
+ *
+ * Resolves the active [SkinId] + [BrightnessMode] from [ThemeStore],
+ * turns brightness into isDark (incl. auto-by-time-of-day via
+ * [rememberIsDark]), picks the matching [MythPalette] + [SkinSpec],
+ * and provides them through [LocalMythPalette] / [LocalSkinSpec] so the
+ * theme-aware [MytharaColors] accessors + the scaffold/backdrop layers
+ * track the live theme. Material 3 colour roles are mapped from the
+ * palette so default Material components stay coherent with the
+ * hand-styled surfaces.
+ */
 @Composable
 fun MytharaTheme(content: @Composable () -> Unit) {
-    CompositionLocalProvider {
+    val ctx = LocalContext.current
+    val themeStore = remember(ctx) {
+        EntryPointAccessors.fromApplication(
+            ctx.applicationContext,
+            ThemeStoreEntryPoint::class.java,
+        ).themeStore()
+    }
+
+    val skin by themeStore.skinFlow().collectAsState(initial = SkinId.SpatialCards)
+    val brightness by themeStore.brightnessModeFlow()
+        .collectAsState(initial = BrightnessMode.TimeOfDay)
+
+    val isDark = rememberIsDark(brightness)
+    val palette = PaletteCatalog.forSkin(skin, isDark)
+    val spec = SkinCatalog.forSkin(skin)
+
+    CompositionLocalProvider(
+        LocalMythPalette provides palette,
+        LocalSkinSpec provides spec,
+    ) {
         MaterialTheme(
-            colorScheme = MytharaColorScheme,
-            typography  = MytharaTypography,
-            content     = content,
+            colorScheme = palette.toColorScheme(isDark),
+            typography = MytharaTypography,
+            content = content,
         )
     }
 }
+
+/** Map a [MythPalette] to a Material 3 ColorScheme. The role mapping
+ *  matches the legacy one (primary=Charple, secondary=Bok, …) so
+ *  Material components render coherently with the brand surfaces. */
+private fun MythPalette.toColorScheme(dark: Boolean) =
+    if (dark) {
+        darkColorScheme(
+            primary = Charple, onPrimary = Fg,
+            secondary = Bok, onSecondary = Bg,
+            tertiary = Malibu,
+            background = Bg, onBackground = Fg,
+            surface = Surface, onSurface = Fg,
+            surfaceVariant = SurfaceMid, onSurfaceVariant = FgMute,
+            outline = SurfaceHigh, outlineVariant = SurfaceMid,
+            error = Sriracha, onError = Fg,
+        )
+    } else {
+        lightColorScheme(
+            primary = Charple, onPrimary = Surface,
+            secondary = Bok, onSecondary = Surface,
+            tertiary = Malibu,
+            background = Bg, onBackground = Fg,
+            surface = Surface, onSurface = Fg,
+            surfaceVariant = SurfaceMid, onSurfaceVariant = FgMute,
+            outline = SurfaceHigh, outlineVariant = SurfaceMid,
+            error = Sriracha, onError = Surface,
+        )
+    }

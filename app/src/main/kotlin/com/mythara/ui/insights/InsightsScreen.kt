@@ -387,6 +387,11 @@ fun InsightsScreen(
                     }
                 }
                 else -> {
+                    // Capture the active palette in composable scope so the
+                    // Canvas DrawScope (non-composable) + the color helpers
+                    // can stay theme-aware (light/dark) without reading the
+                    // composition local from a non-composable context.
+                    val palette = com.mythara.ui.theme.LocalMythPalette.current
                     Canvas(
                         modifier = Modifier
                             .fillMaxSize()
@@ -430,7 +435,7 @@ fun InsightsScreen(
                             val touches = sel == null || sel == edge.fromKey || sel == edge.toKey
                             val baseAlpha = 0.22f + edge.weight * 0.5f
                             val alpha = if (touches) baseAlpha else baseAlpha * 0.16f
-                            val color = edgeColor(edge.kind).copy(alpha = alpha)
+                            val color = edgeColor(edge.kind, palette).copy(alpha = alpha)
                             val stroke = (1f + edge.weight * 3f) * zoom
                             drawLine(color, pa, pb, strokeWidth = stroke)
                             // arrowhead at ~82% toward the target — keeps it
@@ -457,23 +462,23 @@ fun InsightsScreen(
                                         (it.toKey == sel && it.fromKey == node.key)
                                 }
                             val fill = when {
-                                isMe -> MytharaColors.Malibu
-                                else -> nodeColorForKind(node.kind, node.isFavorite)
+                                isMe -> palette.Malibu
+                                else -> nodeColorForKind(node.kind, node.isFavorite, palette)
                             }.copy(alpha = if (dim) 0.3f else 1f)
-                            drawCircle(MytharaColors.Bg, r + 3f * zoom, p)
+                            drawCircle(palette.Bg, r + 3f * zoom, p)
                             drawCircle(fill, r, p)
                             if (isMe) {
-                                drawCircle(MytharaColors.Fg, r, p, style = Stroke(2f * zoom))
+                                drawCircle(palette.Fg, r, p, style = Stroke(2f * zoom))
                             }
                             if (node.hasNotes) {
-                                drawCircle(MytharaColors.Bok, r, p, style = Stroke(1.5f * zoom))
+                                drawCircle(palette.Bok, r, p, style = Stroke(1.5f * zoom))
                             }
                             if (isSel) {
-                                drawCircle(MytharaColors.Bok, r + 4f * zoom, p, style = Stroke(2.5f * zoom))
+                                drawCircle(palette.Bok, r + 4f * zoom, p, style = Stroke(2.5f * zoom))
                             }
                             // label
                             val labelStyle = TextStyle(
-                                color = if (dim) MytharaColors.FgDim else MytharaColors.Fg,
+                                color = if (dim) palette.FgDim else palette.Fg,
                                 fontSize = (9f * zoom).coerceIn(7f, 13f).sp,
                             )
                             val measured = textMeasurer.measure(node.name.take(16), labelStyle)
@@ -515,11 +520,14 @@ private fun nodeRadius(messageCount: Int): Float =
 private fun ContactGraphBuilder.Node.baseRadius(): Float =
     nodeRadius(messageCount) * (if (key == ContactGraphBuilder.ME_KEY) 1.7f else 1f)
 
-private fun edgeColor(kind: ContactGraphBuilder.EdgeKind): Color = when (kind) {
-    ContactGraphBuilder.EdgeKind.RELATES -> MytharaColors.Malibu
-    ContactGraphBuilder.EdgeKind.KNOWS -> MytharaColors.Charple
-    ContactGraphBuilder.EdgeKind.SIMILAR -> MytharaColors.Bok
-    ContactGraphBuilder.EdgeKind.SHARED_TOPIC -> MytharaColors.Mustard
+private fun edgeColor(
+    kind: ContactGraphBuilder.EdgeKind,
+    palette: com.mythara.ui.theme.MythPalette,
+): Color = when (kind) {
+    ContactGraphBuilder.EdgeKind.RELATES -> palette.Malibu
+    ContactGraphBuilder.EdgeKind.KNOWS -> palette.Charple
+    ContactGraphBuilder.EdgeKind.SIMILAR -> palette.Bok
+    ContactGraphBuilder.EdgeKind.SHARED_TOPIC -> palette.Mustard
 }
 
 /** Per-entity-kind node fill. Keeps the colour vocabulary in sync
@@ -530,15 +538,19 @@ private fun edgeColor(kind: ContactGraphBuilder.EdgeKind): Color = when (kind) {
  *
  *  Favourite people still get a slight tint upgrade (full Charple
  *  vs Lavender-ish) so the user's curated favourites pop. */
-private fun nodeColorForKind(kind: String, isFavorite: Boolean): Color = when (kind) {
+private fun nodeColorForKind(
+    kind: String,
+    isFavorite: Boolean,
+    palette: com.mythara.ui.theme.MythPalette,
+): Color = when (kind) {
     com.mythara.analytics.ContactProfileRow.KIND_PERSON ->
-        if (isFavorite) MytharaColors.Charple else MytharaColors.Charple.copy(alpha = 0.78f)
-    com.mythara.analytics.ContactProfileRow.KIND_PLACE -> MytharaColors.Malibu
-    com.mythara.analytics.ContactProfileRow.KIND_ORG -> MytharaColors.Mustard
-    com.mythara.analytics.ContactProfileRow.KIND_APP -> MytharaColors.Bok
-    com.mythara.analytics.ContactProfileRow.KIND_NOTIFICATION -> MytharaColors.FgDim
-    com.mythara.analytics.ContactProfileRow.KIND_UNKNOWN -> MytharaColors.SurfaceHigh
-    else -> MytharaColors.SurfaceHigh
+        if (isFavorite) palette.Charple else palette.Charple.copy(alpha = 0.78f)
+    com.mythara.analytics.ContactProfileRow.KIND_PLACE -> palette.Malibu
+    com.mythara.analytics.ContactProfileRow.KIND_ORG -> palette.Mustard
+    com.mythara.analytics.ContactProfileRow.KIND_APP -> palette.Bok
+    com.mythara.analytics.ContactProfileRow.KIND_NOTIFICATION -> palette.FgDim
+    com.mythara.analytics.ContactProfileRow.KIND_UNKNOWN -> palette.SurfaceHigh
+    else -> palette.SurfaceHigh
 }
 
 private fun edgeKindLabel(kind: ContactGraphBuilder.EdgeKind): String = when (kind) {
@@ -664,7 +676,7 @@ private fun NodeDetailPanel(
                             .padding(top = 5.dp)
                             .size(8.dp)
                             .clip(CircleShape)
-                            .background(edgeColor(edge.kind)),
+                            .background(edgeColor(edge.kind, com.mythara.ui.theme.LocalMythPalette.current)),
                     )
                     Spacer(Modifier.width(8.dp))
                     Column {

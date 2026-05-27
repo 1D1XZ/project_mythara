@@ -199,7 +199,7 @@ class AgentRunner @Inject constructor(
                 // push "thinking…" the moment the user submits.
                 com.mythara.ui.system.DynamicIslandSink.push(
                     text = "thinking…",
-                    accent = com.mythara.ui.theme.MytharaColors.Charple,
+                    accent = com.mythara.ui.theme.MytharaColorsStatic.Charple,
                     ttlMs = 30_000L,
                 )
                 agent.submit(text, fromVoice = fromVoice).collect { turn ->
@@ -211,14 +211,14 @@ class AgentRunner @Inject constructor(
                         is AgentLoop.Turn.ToolStart -> {
                             com.mythara.ui.system.DynamicIslandSink.push(
                                 text = "running ${turn.name}",
-                                accent = com.mythara.ui.theme.MytharaColors.Mustard,
+                                accent = com.mythara.ui.theme.MytharaColorsStatic.Mustard,
                                 ttlMs = 8_000L,
                             )
                         }
                         is AgentLoop.Turn.Finished -> {
                             com.mythara.ui.system.DynamicIslandSink.push(
                                 text = "done · ${turn.iterations} steps",
-                                accent = com.mythara.ui.theme.MytharaColors.Bok,
+                                accent = com.mythara.ui.theme.MytharaColorsStatic.Bok,
                                 ttlMs = 4_000L,
                             )
                             deliverFinished(turn, fromNotification)
@@ -236,7 +236,7 @@ class AgentRunner @Inject constructor(
                         is AgentLoop.Turn.Error -> {
                             com.mythara.ui.system.DynamicIslandSink.push(
                                 text = "error · ${turn.message.take(20)}",
-                                accent = com.mythara.ui.theme.MytharaColors.Sriracha,
+                                accent = com.mythara.ui.theme.MytharaColorsStatic.Sriracha,
                                 ttlMs = 6_000L,
                             )
                         }

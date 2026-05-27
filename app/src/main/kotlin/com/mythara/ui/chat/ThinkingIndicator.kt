@@ -161,7 +161,7 @@ fun ThinkingIndicator(
             val hexAlpha = 0.55f + 0.45f * pulse
             drawPath(
                 path = RoseGeometry.hexPath(cx = cx, cy = cy, scale = unitScale),
-                color = MytharaColors.Bok.copy(alpha = hexAlpha),
+                color = com.mythara.ui.theme.MytharaColorsStatic.Bok.copy(alpha = hexAlpha),
             )
         }
         Spacer(modifier = Modifier.size(8.dp))

@@ -1921,10 +1921,10 @@ private fun Big5Bar(label: String, value: Double) {
 }
 
 private fun big5Color(label: String, value: Double): Color = when {
-    label == "neuroticism" && value > 0.65 -> MytharaColors.Sriracha
-    value > 0.65 -> MytharaColors.Bok
-    value < 0.35 -> MytharaColors.FgMute
-    else -> MytharaColors.Charple
+    label == "neuroticism" && value > 0.65 -> com.mythara.ui.theme.MytharaColorsStatic.Sriracha
+    value > 0.65 -> com.mythara.ui.theme.MytharaColorsStatic.Bok
+    value < 0.35 -> com.mythara.ui.theme.MytharaColorsStatic.FgMute
+    else -> com.mythara.ui.theme.MytharaColorsStatic.Charple
 }
 
 /**

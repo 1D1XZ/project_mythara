@@ -81,6 +81,11 @@ fun SettingsScreen(
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp, vertical = 4.dp),
     ) {
+        // v6 — appearance / theme controls at the top so they're easy
+        // to find. Full skin picker lands in Phase 4.
+        AppearancePanel()
+
+        Spacer(Modifier.height(16.dp))
         AutopilotPanel()
 
         Spacer(Modifier.height(16.dp))

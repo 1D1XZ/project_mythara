@@ -28,6 +28,7 @@ import androidx.compose.ui.window.Dialog
 import com.mythara.analytics.ContactProfileRow
 import com.mythara.ui.theme.Glyph
 import com.mythara.ui.theme.MytharaColors
+import com.mythara.ui.theme.MytharaColorsStatic
 
 /**
  * Long-press picker that lets the user PIN a row's classifier verdict.
@@ -199,30 +200,30 @@ private val KIND_OPTIONS: List<KindOption> = listOf(
         ContactProfileRow.KIND_PERSON,
         "person",
         "real contact — stays in People list",
-        MytharaColors.Charple,
+        MytharaColorsStatic.Charple,
     ),
     KindOption(
         ContactProfileRow.KIND_ORG,
         "organization",
         "brand / business / company (hidden from People)",
-        MytharaColors.Mustard,
+        MytharaColorsStatic.Mustard,
     ),
     KindOption(
         ContactProfileRow.KIND_PLACE,
         "place",
         "location / venue / address (hidden from People)",
-        MytharaColors.Malibu,
+        MytharaColorsStatic.Malibu,
     ),
     KindOption(
         ContactProfileRow.KIND_APP,
         "app",
         "system app / utility notification source (hidden)",
-        MytharaColors.Bok,
+        MytharaColorsStatic.Bok,
     ),
     KindOption(
         ContactProfileRow.KIND_NOTIFICATION,
         "notification-source",
         "weather / news / generic feed (hidden from People)",
-        MytharaColors.FgDim,
+        MytharaColorsStatic.FgDim,
     ),
 )

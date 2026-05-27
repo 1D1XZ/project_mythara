@@ -317,7 +317,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawTimeAxis(
     // 5 ticks evenly spaced. Labels are "−24h" / "−18h" / "−12h"
     // / "−6h" / "now" relative to the window end.
     val ticks = 5
-    val tickStyle = TextStyle(color = MytharaColors.FgMute, fontSize = 9.sp)
+    val tickStyle = TextStyle(color = com.mythara.ui.theme.MytharaColorsStatic.FgMute, fontSize = 9.sp)
     for (i in 0 until ticks) {
         val frac = i / (ticks - 1).toFloat()
         val tsAt = windowStartMs + ((windowEndMs - windowStartMs) * frac).toLong()

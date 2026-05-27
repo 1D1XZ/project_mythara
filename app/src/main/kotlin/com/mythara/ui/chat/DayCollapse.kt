@@ -144,7 +144,7 @@ fun DayPillRow(
                 .padding(end = 8.dp),
         ) {
             drawLine(
-                color = MytharaColors.Charple.copy(alpha = 0.35f),
+                color = com.mythara.ui.theme.MytharaColorsStatic.Charple.copy(alpha = 0.35f),
                 start = Offset(0f, size.height / 2f),
                 end = Offset(size.width, size.height / 2f),
                 strokeWidth = 1f,
@@ -160,7 +160,7 @@ fun DayPillRow(
                 .padding(start = 8.dp),
         ) {
             drawLine(
-                color = MytharaColors.Charple.copy(alpha = 0.35f),
+                color = com.mythara.ui.theme.MytharaColorsStatic.Charple.copy(alpha = 0.35f),
                 start = Offset(0f, size.height / 2f),
                 end = Offset(size.width, size.height / 2f),
                 strokeWidth = 1f,
