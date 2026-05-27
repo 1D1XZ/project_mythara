@@ -129,6 +129,11 @@ fun MytharaRoot(
                 .fillMaxSize()
                 .background(MytharaColors.Bg),
         ) {
+            // v6 — the single skin backdrop layer, behind all content.
+            // Spatial = solid base (no visual change); Aurora/Rose/HUD
+            // paint their signature backdrops here in P6–8.
+            com.mythara.ui.theme.MythBackdrop()
+
             when {
                 onboardingCompleted == null -> {
                     // DataStore not resolved yet — empty bg surface for
