@@ -251,6 +251,24 @@ fun FaceMesh(
     val shapeXs = remember(shapeIndices.size) { FloatArray(shapeIndices.size) }
     val shapeYs = remember(shapeIndices.size) { FloatArray(shapeIndices.size) }
     val shapeZs = remember(shapeIndices.size) { FloatArray(shapeIndices.size) }
+    // Previous-shape coord buffers + count — populated when a live
+    // mood-change mid-session triggers a fresh shape mint. The Canvas
+    // lerps each particle from prev → new over the morph animation
+    // so the geometry visibly evolves rather than popping.
+    val shapeXsPrev = remember(shapeIndices.size) { FloatArray(shapeIndices.size) }
+    val shapeYsPrev = remember(shapeIndices.size) { FloatArray(shapeIndices.size) }
+    val shapeZsPrev = remember(shapeIndices.size) { FloatArray(shapeIndices.size) }
+    var prevShapeCount by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableIntStateOf(0)
+    }
+    // morphProgress = 1 → fully on the current shape. Drops to 0 on
+    // mood-change re-roll, animates back to 1 over ~1.5 s.
+    val morphProgress = androidx.compose.runtime.remember { Animatable(1f) }
+    // Track the seed we last sampled into shapeXs/etc, so we can detect
+    // engine-driven mood-change re-rolls and trigger the morph.
+    var lastSeed by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableLongStateOf(0L)
+    }
     // Per-session shape kind + rotation axis. Re-rolled each time the
     // face-detect transitions absent → present, so the user sees a
     // different 3D shape spinning around a different axis every time
@@ -283,10 +301,7 @@ fun FaceMesh(
         livingShapeEngine.startSession()
         val s = livingShapeEngine.state.value
         activeShapeCount = s.particleCount.coerceAtMost(shapeIndices.size)
-        // Mint the procedural shape using the engine's seed so the same
-        // session always re-renders the same form on recomposition. The
-        // family + seed determine the exact geometry; CreativeShapes'
-        // generators write the (x, y, z) coords into our flat arrays.
+        // Mint the procedural shape using the engine's seed.
         com.mythara.face.CreativeShapes.mintRandomShape(
             seed = s.seed,
             n = activeShapeCount,
@@ -295,13 +310,57 @@ fun FaceMesh(
             intensity = s.intensity,
             xs = shapeXs, ys = shapeYs, zs = shapeZs,
         )
-        // Mirror the engine's axis into our local FloatArray (the
-        // per-frame rotation reads from local for cheap indexing).
         rotationAxis[0] = s.rotationAxis[0]
         rotationAxis[1] = s.rotationAxis[1]
         rotationAxis[2] = s.rotationAxis[2]
         sessionStartMs = s.sessionStartMs
         recentMoods = runCatching { historyStore.recentMoods() }.getOrDefault(emptyList())
+        // Session start = no morph in flight. Track the seed so the
+        // live-mood watcher below can detect a fresh mid-session re-roll.
+        lastSeed = s.seed
+        prevShapeCount = 0
+        morphProgress.snapTo(1f)
+    }
+
+    // Live mood-change watcher: LivingShapeEngine re-rolls the family +
+    // seed when MoodSink emits a fresh label DURING an active session.
+    // We notice the seed change here, snapshot the current shape coords
+    // as "prev", mint the new procedural shape into the active buffers,
+    // and animate morphProgress 0 → 1 over ~1.5 s. The Canvas lerps
+    // per-particle position so the geometry visibly evolves.
+    LaunchedEffect(living.seed) {
+        if (living.seed == 0L || living.seed == lastSeed) return@LaunchedEffect
+        // Snapshot current shape as "previous".
+        val prevCount = activeShapeCount
+        shapeXs.copyInto(shapeXsPrev, 0, 0, prevCount)
+        shapeYs.copyInto(shapeYsPrev, 0, 0, prevCount)
+        shapeZs.copyInto(shapeZsPrev, 0, 0, prevCount)
+        prevShapeCount = prevCount
+        // Mint the new shape into the active buffers.
+        val newCount = living.particleCount.coerceAtMost(shapeIndices.size)
+        com.mythara.face.CreativeShapes.mintRandomShape(
+            seed = living.seed,
+            n = newCount,
+            radius = SHAPE_RADIUS,
+            mood = living.mood,
+            intensity = living.intensity,
+            xs = shapeXs, ys = shapeYs, zs = shapeZs,
+        )
+        activeShapeCount = newCount
+        rotationAxis[0] = living.rotationAxis[0]
+        rotationAxis[1] = living.rotationAxis[1]
+        rotationAxis[2] = living.rotationAxis[2]
+        lastSeed = living.seed
+        // Animate the morph.
+        morphProgress.snapTo(0f)
+        morphProgress.animateTo(
+            targetValue = 1f,
+            animationSpec = tween(
+                durationMillis = 1500,
+                easing = androidx.compose.animation.core.FastOutSlowInEasing,
+            ),
+        )
+        prevShapeCount = 0
     }
     // When the face leaves, ask the engine to wind the session down
     // (drops energy parameters but KEEPS the shape kind + axis so the
@@ -509,9 +568,31 @@ fun FaceMesh(
                         drawCircle(color.copy(alpha = (0.45f * coreA).coerceIn(0f, 0.7f)), baseR, Offset(nx, ny))
                         continue
                     }
-                    val baseX = shapeXs[shapeI]
-                    val baseY = shapeYs[shapeI]
-                    val baseZ = shapeZs[shapeI]
+                    // Morph: when prevShapeCount > 0, this particle is
+                    // mid-evolution between an old shape and the new
+                    // one. Lerp position by morphProgress.value. New
+                    // particles beyond prevCount fade in from origin;
+                    // old particles beyond newCount shrink toward
+                    // origin (handled implicitly by the fade-in path
+                    // since activeShapeCount is already the new count).
+                    val mp = morphProgress.value
+                    val baseX: Float
+                    val baseY: Float
+                    val baseZ: Float
+                    if (prevShapeCount > 0 && shapeI < prevShapeCount) {
+                        baseX = shapeXsPrev[shapeI] * (1f - mp) + shapeXs[shapeI] * mp
+                        baseY = shapeYsPrev[shapeI] * (1f - mp) + shapeYs[shapeI] * mp
+                        baseZ = shapeZsPrev[shapeI] * (1f - mp) + shapeZs[shapeI] * mp
+                    } else if (prevShapeCount > 0) {
+                        // New-only particle: grow out from origin.
+                        baseX = shapeXs[shapeI] * mp
+                        baseY = shapeYs[shapeI] * mp
+                        baseZ = shapeZs[shapeI] * mp
+                    } else {
+                        baseX = shapeXs[shapeI]
+                        baseY = shapeYs[shapeI]
+                        baseZ = shapeZs[shapeI]
+                    }
                     rodriguesRotate(
                         baseX, baseY, baseZ,
                         axKx, axKy, axKz,

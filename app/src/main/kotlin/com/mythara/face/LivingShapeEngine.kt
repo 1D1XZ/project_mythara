@@ -157,6 +157,20 @@ class LivingShapeEngine @Inject constructor(
                 delay(60_000L)
             }
         }
+        // Live mood-change trigger: when MoodSink emits a fresh label
+        // DURING an active session and it's different from the
+        // session's starting mood, mint a brand-new shape (new
+        // family + new seed). FaceMesh observes the seed change and
+        // smoothly morphs from old → new geometry without ending the
+        // session. So a smile mid-stare → the shape evolves LIVE.
+        scope.launch {
+            MoodSink.moodFlow.collect { newMood ->
+                val cur = _state.value
+                if (cur.active && newMood != null && newMood != cur.mood) {
+                    mutateForMoodChange(newMood)
+                }
+            }
+        }
     }
 
     /** Called by FaceMesh on every face-detect session start
@@ -206,6 +220,49 @@ class LivingShapeEngine @Inject constructor(
             intensity = intensity,
             active = true,
             sessionStartMs = System.currentTimeMillis(),
+        )
+    }
+
+    /** Live mid-session re-roll triggered when MoodSink emits a fresh
+     *  label that differs from the session's current mood. Picks a
+     *  brand-new family + seed (same never-repeat / mood-bias logic
+     *  as startSession), updates the state, and lets FaceMesh smoothly
+     *  morph from the previous geometry to the new one. Does NOT end
+     *  the session — sessionStartMs + active flag stay the same so
+     *  the memory record on session-end captures the full arc. */
+    private fun mutateForMoodChange(newMood: String) {
+        val cur = _state.value
+        if (!cur.active) return
+        val seed = System.nanoTime() xor Random.nextLong()
+        val rnd = Random(seed)
+        val avoid = recentFamilies.take(2).toSet()
+        var family = CreativeShapes.Family.SphericalHarmonic
+        for (attempt in 0 until 6) {
+            val candidateRng = Random(seed + attempt * 7919L)
+            family = CreativeShapes.pickFamilyExternal(newMood, candidateRng)
+            if (family !in avoid) break
+        }
+        recentFamilies.addFirst(family)
+        while (recentFamilies.size > 4) recentFamilies.removeLast()
+        // Fresh random rotation axis so the new shape tilts in a new
+        // direction — visual change matches the emotional change.
+        val axis = FloatArray(3)
+        val u = rnd.nextFloat() * 2f - 1f
+        val phi = rnd.nextFloat() * 2f * kotlin.math.PI.toFloat()
+        val rxy = kotlin.math.sqrt(1f - u * u)
+        axis[0] = rxy * kotlin.math.cos(phi)
+        axis[1] = rxy * kotlin.math.sin(phi)
+        axis[2] = u
+        val intensity = emotionDetector.reading.value?.intensity ?: cur.intensity
+        _state.value = cur.copy(
+            family = family,
+            seed = seed,
+            rotationAxis = axis,
+            rotationRateHz = ShapeMoodMapping.rotationRateHz(newMood, intensity),
+            glowMultiplier = ShapeMoodMapping.glowMultiplier(newMood, intensity),
+            particleCount = CreativeShapes.particleCount(family, newMood, intensity),
+            mood = newMood,
+            intensity = intensity,
         )
     }
 
