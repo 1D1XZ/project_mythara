@@ -886,8 +886,14 @@ private fun TextBubble(
                 .padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
             Column(modifier = Modifier.fillMaxWidth()) {
-                // Body text — coloured AnnotatedString once the
-                // encode completes, plain text in the meantime.
+                // Body text — coloured AnnotatedString in Music
+                // Mode (the encoder paints word-by-word colour and
+                // the karaoke highlight); otherwise MarkdownText
+                // renders **bold** / *italic* / lists / quotes /
+                // links / code so agent prose stops showing as raw
+                // asterisks and dashes. Music Mode takes
+                // precedence because its colour-per-word layer
+                // would conflict with markdown's inline styling.
                 if (composedAnnotated != null) {
                     Text(
                         text = composedAnnotated,
@@ -895,10 +901,9 @@ private fun TextBubble(
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 } else {
-                    Text(
+                    com.mythara.ui.markdown.MarkdownText(
                         text = displayText,
                         color = bodyColor,
-                        style = MaterialTheme.typography.bodyMedium,
                     )
                 }
                 // ▶ replay chip — always visible on Music Mode

@@ -446,7 +446,10 @@ private fun RecentNoteRow(note: NotesViewModel.SavedNote) {
             style = MaterialTheme.typography.bodySmall.copy(color = accent),
         )
         Column {
-            Text(
+            // Notes may be hand-typed markdown — render inline
+            // formatting so `**bold**` / `*italic*` / bullets show
+            // their meaning instead of literal sigils.
+            com.mythara.ui.markdown.MarkdownText(
                 text = note.content,
                 color = MytharaColors.Fg,
                 style = MaterialTheme.typography.bodySmall,

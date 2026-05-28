@@ -1461,12 +1461,15 @@ private fun ProfileDetail(
 
         Spacer(Modifier.height(12.dp))
         DetailCard("${Glyph.DiamondOutline} relationship summary") {
-            Text(
-                text = p.relationshipSummary
-                    ?: "Not enough data yet — Mythara needs a few more conversations before she can describe this relationship.",
-                color = if (p.relationshipSummary != null) MytharaColors.Fg else MytharaColors.FgDim,
-                style = MaterialTheme.typography.bodyMedium,
-            )
+            if (p.relationshipSummary != null) {
+                com.mythara.ui.markdown.MarkdownText(text = p.relationshipSummary!!)
+            } else {
+                Text(
+                    text = "Not enough data yet — Mythara needs a few more conversations before she can describe this relationship.",
+                    color = MytharaColors.FgDim,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
         }
 
         // ── Aliases — user-curated nicknames / alternate names the
@@ -1594,11 +1597,7 @@ private fun ProfileDetail(
         p.personalityInsights?.takeIf { it.isNotBlank() }?.let { insights ->
             Spacer(Modifier.height(12.dp))
             DetailCard("${Glyph.DiamondOutline} personality insights · how to message them") {
-                Text(
-                    text = insights,
-                    color = MytharaColors.Fg,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
+                com.mythara.ui.markdown.MarkdownText(text = insights)
             }
         }
 

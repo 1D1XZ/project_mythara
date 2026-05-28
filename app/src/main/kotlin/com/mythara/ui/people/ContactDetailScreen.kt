@@ -588,26 +588,12 @@ private fun StatRow(label: String, value: String) {
 @Composable
 private fun MemoryCard(title: String, body: String) {
     DetailCard(title = "◇ $title") {
-        // Split on blank lines so multi-paragraph relationship
-        // summaries breathe — single-line bodies render
-        // identically. Bumped line-height for readability of dense
-        // analytics text (line-height 1.45× the font size matches
-        // editorial typography defaults).
-        val paragraphs = remember(body) {
-            body.trim().split(Regex("\\n\\s*\\n")).map { it.trim() }.filter { it.isNotBlank() }
-        }
-        paragraphs.forEachIndexed { i, para ->
-            if (i > 0) Spacer(Modifier.height(8.dp))
-            Text(
-                text = para,
-                color = MytharaColors.Fg,
-                style = MaterialTheme.typography.bodyMedium.copy(
-                    lineHeight = androidx.compose.ui.unit.TextUnit(
-                        20f, androidx.compose.ui.unit.TextUnitType.Sp,
-                    ),
-                ),
-            )
-        }
+        // Body may be markdown — the model + user-typed notes
+        // routinely use **bold**, *italic*, bullets, headings.
+        // MarkdownText handles paragraph splitting, line-height,
+        // and inline formatting in one pass so we don't reimplement
+        // them per call site.
+        com.mythara.ui.markdown.MarkdownText(text = body)
     }
 }
 
@@ -693,23 +679,7 @@ private fun PersonalityCard(row: ContactProfileRow, notableTraits: List<String>)
                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
             )
             Spacer(Modifier.height(6.dp))
-            val paragraphs = remember(insights) {
-                insights.trim().split(Regex("\\n\\s*\\n"))
-                    .map { it.trim() }
-                    .filter { it.isNotBlank() }
-            }
-            paragraphs.forEachIndexed { i, para ->
-                if (i > 0) Spacer(Modifier.height(8.dp))
-                Text(
-                    text = para,
-                    color = MytharaColors.Fg,
-                    style = MaterialTheme.typography.bodyMedium.copy(
-                        lineHeight = androidx.compose.ui.unit.TextUnit(
-                            20f, androidx.compose.ui.unit.TextUnitType.Sp,
-                        ),
-                    ),
-                )
-            }
+            com.mythara.ui.markdown.MarkdownText(text = insights)
         }
     }
 }

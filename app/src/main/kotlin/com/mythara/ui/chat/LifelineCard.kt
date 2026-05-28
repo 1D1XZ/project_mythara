@@ -157,10 +157,9 @@ fun LifelineCard(
                 // memory / chat timeline; Gemini Flash captions are
                 // typically 1-3 sentences, so the card grows by at
                 // most a few lines.
-                !item.captionText.isNullOrBlank() -> Text(
+                !item.captionText.isNullOrBlank() -> com.mythara.ui.markdown.MarkdownText(
                     text = item.captionText,
                     color = MytharaColors.Fg,
-                    style = MaterialTheme.typography.bodyMedium,
                 )
                 item.captionStatus == "PENDING" -> Text(
                     text = "${Glyph.Ellipsis} captioning…",

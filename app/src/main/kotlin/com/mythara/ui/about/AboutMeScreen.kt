@@ -909,7 +909,7 @@ fun AboutMeScreen(
                 }
                 if (b5.insights.isNotBlank()) {
                     Spacer(Modifier.height(8.dp))
-                    Text(b5.insights, color = MytharaColors.Fg, style = MaterialTheme.typography.bodyMedium)
+                    com.mythara.ui.markdown.MarkdownText(text = b5.insights)
                 }
                 Spacer(Modifier.height(6.dp))
                 Text(
