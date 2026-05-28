@@ -238,17 +238,20 @@ fun ContactDetailScreen(
             //     "who is this person, in Mythara's read". Always
             //     rendered (bars show "—" + tiered confidence
             //     disclaimer when sample size is still 0).
-            item("personality") { PersonalityCard(row = row) }
+            // Notable traits + Big Five + insights all fold into one
+            // headline PersonalityCard: short tag chips read first,
+            // bars give the quantitative read below them, prose
+            // grounds both in narrative. Single card so the user
+            // never has to scan three independently-styled blocks
+            // to form a mental model of who this person is.
+            val notable = decodeStringList(row.notableTraitsJson)
+            item("personality") { PersonalityCard(row = row, notableTraits = notable) }
             item("stats") { StatsCard(row = row) }
             row.relationshipSummary?.takeIf { it.isNotBlank() }?.let {
                 item("summary") { MemoryCard(title = "relationship summary", body = it) }
             }
             row.userNotes?.takeIf { it.isNotBlank() }?.let {
                 item("notes") { MemoryCard(title = "your notes", body = it) }
-            }
-            val notable = decodeStringList(row.notableTraitsJson)
-            if (notable.isNotEmpty()) {
-                item("traits") { ChipsCard(title = "notable traits", chips = notable) }
             }
             val topics = decodeStringList(row.topTopicsJson)
             if (topics.isNotEmpty()) {
@@ -508,8 +511,41 @@ private fun MemoryCard(title: String, body: String) {
  * personality before raw stats.
  */
 @Composable
-private fun PersonalityCard(row: ContactProfileRow) {
+private fun PersonalityCard(row: ContactProfileRow, notableTraits: List<String>) {
     DetailCard(title = "● personality — mythara's read") {
+        // Notable traits ride at the TOP — short word-level tags
+        // ("apologetic", "task-oriented") that summarise the
+        // contact at a glance before the Big Five bars give the
+        // quantitative read.
+        if (notableTraits.isNotEmpty()) {
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                notableTraits.forEach { tag ->
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(MytharaColors.Charple.copy(alpha = 0.18f))
+                            .border(
+                                1.dp,
+                                MytharaColors.Charple.copy(alpha = 0.40f),
+                                RoundedCornerShape(6.dp),
+                            )
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                    ) {
+                        Text(
+                            text = tag,
+                            color = MytharaColors.Fg,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.SemiBold,
+                            ),
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+        }
         TraitBar("openness", row.openness, MytharaColors.Charple)
         TraitBar("conscientiousness", row.conscientiousness, MytharaColors.Malibu)
         TraitBar("extraversion", row.extraversion, MytharaColors.Bok)
