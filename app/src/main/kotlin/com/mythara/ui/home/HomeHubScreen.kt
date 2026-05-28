@@ -612,35 +612,47 @@ private fun ShapeToneRow(modifier: Modifier = Modifier) {
 
     // Continuous loop while tone is ON.
     //
+    // Each cycle is: ask the agent for a fresh evolution-focused line
+    // → flash it on screen → play the shape's tone alongside it → when
+    // the tone ends, clear the flash → quiet pause → next cycle.
+    //
+    // Tone + text are tied 1-to-1: tone only sounds while the line is
+    // displayed; when there's nothing to display, the loop is silent.
+    //
     // Re-reads `livingShapeEngine.state.value` at the top of every
     // iteration so a mid-session mood→shape morph immediately changes
-    // the next tone pattern — the audible voice tracks the visual.
-    //
-    // The synth returns the audible duration (notes × NOTE_DURATION
-    // + gaps × INTER_MOTIF_GAP). We wait that long + a small breath
-    // (~600 ms) before the next iteration so the listener has a
-    // sliver of silence between loops.
+    // the next melody — audible voice tracks the visual.
     LaunchedEffect(toneOn) {
         if (!toneOn) {
             toneSynth.stop()
+            flash = null
             return@LaunchedEffect
         }
         while (true) {
             val current = livingShapeEngine.state.value
+            // 1. Generate observation BEFORE starting the tone so we
+            //    never play sound without a matching line on screen.
+            //    Falls back to a soft canned line on agent failure.
+            val msg = runCatching { observation.generate(current) }
+                .getOrDefault("this shape is yours.")
+            // If the user flipped the toggle off while the network
+            // call was in flight, abandon this cycle.
+            if (!toneOn) break
+            // 2. Show flash + start tone in lockstep.
+            flash = msg
             val durMs = runCatching { toneSynth.play(current) }.getOrDefault(3_000L)
-            kotlinx.coroutines.delay(durMs + 600L)
+            // 3. Hold the flash for at least the tone's duration so the
+            //    line is on screen for as long as the tone sounds.
+            //    Cap at 9 s so a very long melody doesn't pin a single
+            //    line forever; the user can still read in that window.
+            val holdMs = durMs.coerceAtMost(9_000L)
+            kotlinx.coroutines.delay(holdMs)
+            // 4. Tone has finished → clear the line. No text = no tone.
+            flash = null
+            // 5. Quiet pause between cycles (no flash, no audio) so the
+            //    surface has breathing room before the next observation.
+            kotlinx.coroutines.delay(3_000L)
         }
-    }
-
-    // Fresh AI observation whenever (a) the user turns the tone ON,
-    // or (b) the shape's family / seed changes while ON.
-    LaunchedEffect(toneOn, living.family, living.seed) {
-        if (!toneOn) return@LaunchedEffect
-        val msg = runCatching { observation.generate(living) }
-            .getOrDefault("this shape is yours.")
-        flash = msg
-        kotlinx.coroutines.delay(4_400L)
-        flash = null
     }
 
     // Stop the tone if the composable leaves composition (user
