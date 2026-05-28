@@ -348,6 +348,7 @@ fun MytharaRoot(
                                         onOpenMemory = { nav.navigate(Routes.Memory) { launchSingleTop = true } },
                                         onOpenInsights = { nav.navigate(Routes.Insights) { launchSingleTop = true } },
                                         onOpenAboutMe = { nav.navigate(Routes.AboutMe) { launchSingleTop = true } },
+                                        onOpenAlerts = { nav.navigate(Routes.NotifHub) { launchSingleTop = true } },
                                     )
                                 }
                             }

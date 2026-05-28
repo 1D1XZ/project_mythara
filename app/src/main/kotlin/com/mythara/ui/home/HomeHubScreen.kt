@@ -210,6 +210,11 @@ fun HomeHubScreen(
     onOpenMemory: () -> Unit = {},
     onOpenInsights: () -> Unit = {},
     onOpenAboutMe: () -> Unit = {},
+    /** User-tap on a notification chip → navigate to the full Alerts
+     *  hub (Routes.NotifHub) instead of jumping straight into the
+     *  source app. The "open source app" path stays available via
+     *  the Alerts screen's row → ↗ open chevron. */
+    onOpenAlerts: () -> Unit = {},
     vm: HomeHubViewModel = hiltViewModel(),
     faceVm: FaceViewModel = hiltViewModel(),
 ) {
@@ -284,18 +289,19 @@ fun HomeHubScreen(
                     } else Modifier,
             )
 
-            // Key notifications strip — top app chips, tap → open
-            // source app. Hidden when empty. Activity context here
-            // (LocalContext.current) so PendingIntent.send() lands
-            // on the BAL allowlist for foreground launches; the VM's
-            // @ApplicationContext would trip the BAL block on 14+.
+            // Key notifications strip — top app chips. v7 P7+:
+            // tapping a chip now opens the full Alerts hub
+            // (Routes.NotifHub) where the user can see all live
+            // notifications, dismiss, ask Mythara, or use the row's
+            // ↗ chevron to open the source app. Routing the Home
+            // tap to Alerts (instead of straight to the source app)
+            // gives the user a manageable triage surface before they
+            // commit to leaving Mythara.
             if (notifications.isNotEmpty()) {
                 Spacer(Modifier.height(10.dp))
                 NotificationsStrip(
                     items = notifications,
-                    onOpen = { item ->
-                        com.mythara.services.openNotificationSource(ctx, item.recent)
-                    },
+                    onOpen = { onOpenAlerts() },
                 )
             }
 
