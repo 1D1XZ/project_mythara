@@ -96,6 +96,9 @@ fun MytharaSpine(
     modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
+    /** v7+ — separate slim panel toggled by tapping the rose pip:
+     *  apps-only thin scrollable strip (no Mythara nav rows). */
+    var appsOpen by remember { mutableStateOf(false) }
 
     Box(modifier = modifier.fillMaxSize()) {
         // ── Breathing spine VISUAL — the 3 dp glow ────────────────
@@ -143,13 +146,20 @@ fun MytharaSpine(
                 .fillMaxHeight()
                 .width(SPINE_HIT_WIDTH_DP.dp)
                 .pointerInput(Unit) {
-                    detectTapGestures(onTap = { expanded = !expanded })
+                    detectTapGestures(onTap = {
+                        // Spine tap → full launcher. Close the
+                        // apps-only strip if it was open so the two
+                        // panels never overlap.
+                        appsOpen = false
+                        expanded = !expanded
+                    })
                 },
         )
 
-        // Tiny rose pip at the top of the spine — quick-tap to Chat.
-        // Sits inside the systemBars top inset so it never collides
-        // with the camera cutout.
+        // Tiny rose pip at the top of the spine — v7+: TOGGLES the
+        // apps-only thin strip (just installed app icons, no Mythara
+        // nav rows). The full launcher (Mythara nav + apps) is still
+        // reachable via the spine itself.
         Box(
             modifier = Modifier
                 .align(Alignment.TopEnd)
@@ -160,7 +170,7 @@ fun MytharaSpine(
                 .background(MytharaColors.Charple.copy(alpha = 0.6f))
                 .clickable {
                     expanded = false
-                    onRoseTap()
+                    appsOpen = !appsOpen
                 },
             contentAlignment = Alignment.Center,
         ) {
@@ -198,6 +208,22 @@ fun MytharaSpine(
             )
         }
 
+        // ── Slim apps-only strip — toggled by the rose pip ─────────
+        AnimatedVisibility(
+            visible = appsOpen,
+            enter = slideInHorizontally(
+                animationSpec = tween(PANEL_OPEN_MS),
+                initialOffsetX = { full -> full },
+            ) + fadeIn(tween(PANEL_OPEN_MS)),
+            exit = slideOutHorizontally(
+                animationSpec = tween(PANEL_CLOSE_MS),
+                targetOffsetX = { full -> full },
+            ) + fadeOut(tween(PANEL_CLOSE_MS)),
+            modifier = Modifier.align(Alignment.CenterEnd),
+        ) {
+            AppsStripPanel(onAfterLaunch = { appsOpen = false })
+        }
+
         // ── Auto-collapse after inactivity ────────────────────────
         if (expanded) {
             LaunchedEffect(expanded) {
@@ -205,8 +231,37 @@ fun MytharaSpine(
                 expanded = false
             }
         }
+        if (appsOpen) {
+            LaunchedEffect(appsOpen) {
+                delay(AUTO_COLLAPSE_MS)
+                appsOpen = false
+            }
+        }
     }
 }
+
+/**
+ * Thin scrollable strip of installed app icons only. No Mythara nav
+ * rows, no headers — just apps. Toggled by tapping the rose pip at
+ * the top of the spine. Tap an icon to launch + auto-close the strip.
+ */
+@Composable
+private fun AppsStripPanel(onAfterLaunch: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .windowInsetsPadding(WindowInsets.systemBars)
+            .padding(end = (SPINE_WIDTH_DP + 4).dp, top = 8.dp, bottom = 8.dp)
+            .widthIn(min = APPS_STRIP_WIDTH_DP.dp, max = APPS_STRIP_WIDTH_DP.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(MytharaColors.Surface)
+            .border(1.dp, MytharaColors.SurfaceHigh, RoundedCornerShape(12.dp))
+            .padding(6.dp),
+    ) {
+        com.mythara.ui.launcher.AppDock(onLaunch = { onAfterLaunch() })
+    }
+}
+
+private const val APPS_STRIP_WIDTH_DP = 76
 
 /**
  * The panel that slides out when the user taps the spine. A
