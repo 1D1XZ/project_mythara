@@ -92,6 +92,7 @@ fun MytharaSpine(
     onOpenSettings: () -> Unit = {},
     onOpenTriage: () -> Unit = {},
     onOpenAlerts: () -> Unit = {},
+    onOpenCalls: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -193,6 +194,7 @@ fun MytharaSpine(
                 onOpenSettings = { expanded = false; onOpenSettings() },
                 onOpenTriage = { expanded = false; onOpenTriage() },
                 onOpenAlerts = { expanded = false; onOpenAlerts() },
+                onOpenCalls = { expanded = false; onOpenCalls() },
             )
         }
 
@@ -222,6 +224,7 @@ private fun LauncherPanel(
     onOpenSettings: () -> Unit,
     onOpenTriage: () -> Unit,
     onOpenAlerts: () -> Unit,
+    onOpenCalls: () -> Unit,
 ) {
     Box(
         modifier = Modifier
@@ -252,11 +255,26 @@ private fun LauncherPanel(
                 }
             }
             Spacer(modifier = Modifier.height(2.dp))
+            // v7 P6 — macOS-style magnifying app dock at the top of
+            // the launcher panel. Tap an icon to launch the app; while
+            // dragging across the dock, icons near the touch grow with
+            // a Gaussian fisheye scaler.
+            com.mythara.ui.launcher.AppDock(
+                onLaunch = { onCollapse() },
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "${Glyph.AccentBar} mythara",
+                color = MytharaColors.FgMute,
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                modifier = Modifier.padding(start = 4.dp, top = 2.dp, bottom = 2.dp),
+            )
             LauncherEntry("me", "🙂", onOpenAboutMe)
             LauncherEntry("people", "●", onOpenPeople)
             LauncherEntry("memory", "┃", onOpenMemory)
             LauncherEntry("tasks", "✓", onOpenTasks)
             LauncherEntry("alerts", "◆", onOpenAlerts)
+            LauncherEntry("calls", "↗", onOpenCalls)
             LauncherEntry("usage", "◇", onOpenUsage)
             LauncherEntry("settings", "◆", onOpenSettings)
             LauncherEntry("triage", "✓", onOpenTriage)

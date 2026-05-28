@@ -528,6 +528,19 @@ fun MytharaRoot(
                                     )
                                 }
                             }
+                            composable(Routes.CallLog) {
+                                com.mythara.ui.scaffold.MytharaScaffold(
+                                    title = "calls",
+                                    glyph = com.mythara.ui.theme.Glyph.DiamondFilled,
+                                    onBack = { nav.popBackStack() },
+                                ) {
+                                    com.mythara.ui.calllog.CallLogScreen(
+                                        onOpenContacts = {
+                                            nav.navigate(Routes.People) { launchSingleTop = true }
+                                        },
+                                    )
+                                }
+                            }
                             composable(Routes.Usage) {
                                 com.mythara.ui.scaffold.MytharaScaffold(
                                     title = "usage",
@@ -879,6 +892,7 @@ fun MytharaRoot(
                         onOpenSettings = { nav.navigate(Routes.Settings) { launchSingleTop = true } },
                         onOpenTriage = { nav.navigate(Routes.Triage) { launchSingleTop = true } },
                         onOpenAlerts = { nav.navigate(Routes.NotifHub) { launchSingleTop = true } },
+                        onOpenCalls = { nav.navigate(Routes.CallLog) { launchSingleTop = true } },
                     )
 
                     } // end inner Box (layout + overlays)
@@ -1029,6 +1043,10 @@ object Routes {
     /** In-app notification hub — live phone notifications, grouped,
      *  with dismiss / mark-important / ask-Mythara, plus a triaged tab. */
     const val NotifHub = "notif-hub"
+    /** Consolidated call log — system phone calls + WhatsApp calls
+     *  captured via notifications, tap to call back, long-press to
+     *  open contacts. */
+    const val CallLog = "call-log"
     /** MiniMax API usage / quota dashboard. */
     const val Usage = "usage"
     /** Dashboard / command center — surfaced from the amulet as a
