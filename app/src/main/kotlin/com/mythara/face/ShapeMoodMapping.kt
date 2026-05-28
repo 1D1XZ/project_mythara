@@ -78,10 +78,16 @@ internal object ShapeMoodMapping {
     }
 
     /** Pick a shape weighted by [mood] + boosted by [recentHistory]'s
-     *  dominant mood. */
+     *  dominant mood + guaranteed-different from the last
+     *  [AVOID_RECENT] shapes in [recentShapes]. Implements the
+     *  "shape must always evolve and never repeat from old" rule
+     *  the user asked for — zeroing the weights of recently-used
+     *  shapes means the next pick is forced into something fresh
+     *  even when the mood + history both point at the same kind. */
     fun pickShape(
         mood: String?,
         recentHistory: List<String>,
+        recentShapes: List<ParticleShapes.Kind> = emptyList(),
         rnd: Random,
     ): ParticleShapes.Kind {
         val base = weightsFor(mood)
@@ -94,7 +100,14 @@ internal object ShapeMoodMapping {
             val historyWeights = weightsFor(dominantRecent)
             mergeWithHistoryBoost(base, historyWeights, HISTORY_BLEND_WEIGHT)
         } else base
-        return weightedPick(merged, rnd)
+        // Exclude the last AVOID_RECENT shapes. If that would leave
+        // nothing pickable (recentShapes covers the whole catalogue),
+        // fall through to the unfiltered weights — we'd rather repeat
+        // than crash.
+        val avoidSet = recentShapes.take(AVOID_RECENT).toSet()
+        val filtered = merged.filterKeys { it !in avoidSet }
+        val final = if (filtered.values.sum() <= 0f) merged else filtered
+        return weightedPick(final, rnd)
     }
 
     /** Per-second rotation rate (Hz) for the chosen shape, modulated
@@ -168,4 +181,47 @@ internal object ShapeMoodMapping {
      *  0.20 felt right: noticeable but not so strong that today's
      *  actual mood gets drowned out by last week's pattern. */
     private const val HISTORY_BLEND_WEIGHT = 0.20f
+
+    /** How many of the most-recent shapes to exclude from the next
+     *  pick. With 6 shape kinds in the catalogue, avoiding the last
+     *  2 leaves 4 to pick from — plenty of variety, and the user
+     *  reliably sees a different geometry on every face-detect
+     *  session. */
+    private const val AVOID_RECENT = 2
+
+    /** Per-shape baseline particle count. Wireframe polytopes need
+     *  fewer points to read clean — too dense and the edges blur into
+     *  a fuzzy blob. Parametric solids (torus, knot) read better dense
+     *  because every particle samples the surface. */
+    fun particleCount(kind: ParticleShapes.Kind, mood: String?, intensity: Float): Int {
+        val base = when (kind) {
+            ParticleShapes.Kind.Torus -> 900
+            ParticleShapes.Kind.TrefoilKnot -> 800
+            ParticleShapes.Kind.Icosahedron -> 650
+            ParticleShapes.Kind.Cube -> 500
+            ParticleShapes.Kind.Octahedron -> 480
+            ParticleShapes.Kind.Tetrahedron -> 380
+        }
+        val moodMul = when (mood) {
+            "excited" -> 1.40f
+            "happy" -> 1.20f
+            "frustrated" -> 1.15f
+            "anxious" -> 1.05f
+            "calm" -> 0.80f
+            "sad" -> 0.70f
+            else -> 1.00f
+        }
+        // Intensity scales another ±20% on top, so the dynamic range
+        // across the whole space is roughly 200 (sad, low intensity,
+        // tetrahedron) → 1500 (excited, peak intensity, torus). The
+        // FaceMesh pre-allocates MAX_SHAPE_PARTICLES and we just
+        // index up to this count each session — no GC churn.
+        return (base * moodMul * (0.80f + intensity * 0.40f)).toInt()
+            .coerceIn(120, MAX_PARTICLE_COUNT)
+    }
+
+    /** Upper bound the [FaceMesh] pre-allocates. Generous so the
+     *  user's "no limits, size no limits" ask is honoured without
+     *  having to grow the pool at runtime (which would churn GC). */
+    const val MAX_PARTICLE_COUNT = 1500
 }

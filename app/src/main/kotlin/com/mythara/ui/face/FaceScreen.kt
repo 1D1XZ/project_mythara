@@ -264,26 +264,49 @@ fun FaceMesh(
     var sessionStartMs by androidx.compose.runtime.remember {
         androidx.compose.runtime.mutableLongStateOf(0L)
     }
+    // Sliding window of the most-recent shape kinds — fed into
+    // ShapeMoodMapping.pickShape so the next pick is GUARANTEED
+    // different from the last few. Implements the "shape must
+    // always evolve, never repeat from old" rule.
+    var recentShapeKinds by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf<List<ParticleShapes.Kind>>(emptyList())
+    }
+    // How many of the pre-allocated SHAPE particles to actually draw
+    // this session. The pool is sized at the MAX ceiling (1500); the
+    // ShapeMoodMapping.particleCount() value picks a session-specific
+    // subset based on the shape kind + mood + intensity, so the visible
+    // density grows or shrinks freely without re-allocating.
+    var activeShapeCount by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableIntStateOf(shapeIndices.size)
+    }
     LaunchedEffect(sessionId) {
         val rnd = Random(System.nanoTime() xor sessionId.toLong().shl(13))
         // Read fresh recent history each session so a record we made
         // last time influences this pick.
-        recentMoods = runCatching {
-            com.mythara.face.MoodHistoryStore.let { historyStore.recentMoods() }
-        }.getOrDefault(emptyList())
-        // Current mood reading from EmotionDetector — may still be
-        // null on the very first frame, in which case the shape pick
-        // falls back to the uniform distribution.
+        recentMoods = runCatching { historyStore.recentMoods() }.getOrDefault(emptyList())
+        // Current mood reading + intensity from EmotionDetector — may
+        // still be null on the very first frame, in which case the
+        // shape pick falls back to the uniform distribution.
         val mood = com.mythara.branding.MoodSink.current()
+        val intensity = emotionDetector.reading.value?.intensity ?: 0.5f
         val kind = com.mythara.face.ShapeMoodMapping.pickShape(
             mood = mood,
             recentHistory = recentMoods,
+            recentShapes = recentShapeKinds,
             rnd = rnd,
         )
         shapeKindLabel = kind
+        // Slide the new pick onto the front of the avoid-list, keeping
+        // the most-recent two — long enough to GUARANTEE evolution,
+        // short enough to not box us into a corner with only 6 kinds.
+        recentShapeKinds = (listOf(kind) + recentShapeKinds).take(4)
+        // Dynamic particle count for THIS session.
+        val n = com.mythara.face.ShapeMoodMapping.particleCount(kind, mood, intensity)
+            .coerceAtMost(shapeIndices.size)
+        activeShapeCount = n
         ParticleShapes.sampleShape(
             kind = kind,
-            n = shapeIndices.size,
+            n = n,
             radius = SHAPE_RADIUS,
             rnd = rnd,
             xs = shapeXs, ys = shapeYs, zs = shapeZs,
@@ -459,15 +482,25 @@ fun FaceMesh(
                 }
                 PRole.SHAPE -> {
                     val aspect = w / h
-                    // Unified 3D shape: rotate the particle's shape-
-                    // space coordinate around the session-randomised
-                    // axis. Same axis + rotation for every particle so
-                    // the entire shape spins as one rigid body. The
-                    // shape itself was chosen at random for this
-                    // session — tetrahedron / cube / octahedron /
-                    // icosahedron / torus / trefoil knot — so the
-                    // user sees a different form each time they pick
-                    // up the phone to look at it.
+                    // Only the first `activeShapeCount` shape particles
+                    // get assembled into this session's geometry. The
+                    // rest stay in their scatter Lissajous drift — the
+                    // pool is sized at MAX but the visible shape uses
+                    // a session-specific subset that varies with the
+                    // shape kind × mood × intensity.
+                    if (shapeI >= activeShapeCount) {
+                        // Drift only — no rotated coord, no assembly.
+                        color = palette.Charple
+                        coreA = 0.20f * (1f - 0.6f * ease) * p.glow * glowMul
+                        shapeI++
+                        // Render scatter-only and skip the assembled path
+                        val nx = sxN * w
+                        val ny = syN * h
+                        val baseR = p.size * minOf(w, h)
+                        drawCircle(color.copy(alpha = (0.15f * coreA).coerceIn(0f, 0.4f)), baseR * 2.0f, Offset(nx, ny))
+                        drawCircle(color.copy(alpha = (0.45f * coreA).coerceIn(0f, 0.7f)), baseR, Offset(nx, ny))
+                        continue
+                    }
                     val baseX = shapeXs[shapeI]
                     val baseY = shapeYs[shapeI]
                     val baseZ = shapeZs[shapeI]
@@ -590,10 +623,13 @@ private const val SHAPE_ROT_HZ = 0.30f
  *  move. */
 private const val SHAPE_GAZE_MULT = 0.085f
 
-/** Foreground particle count. Used to be 110 (sphere) + 320 (circle)
- *  = 430 — keep the same total so the shape reads with similar
- *  visual density to the old ring + sphere. */
-private const val SHAPE_PARTICLE_COUNT = 430
+/** Foreground particle pool — pre-allocated to a generous ceiling so
+ *  the per-session [ShapeMoodMapping.particleCount] can scale freely
+ *  without re-allocating. Used to be a fixed 430; the user asked for
+ *  "no limits", so we sit at [ShapeMoodMapping.MAX_PARTICLE_COUNT] and
+ *  the actual draw count varies per shape × mood × intensity. */
+private val SHAPE_PARTICLE_COUNT: Int
+    get() = com.mythara.face.ShapeMoodMapping.MAX_PARTICLE_COUNT
 
 
 /** Mouth waveform y-offset (normalised height) at position [u] in

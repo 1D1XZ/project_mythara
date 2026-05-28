@@ -2,9 +2,9 @@ package com.mythara.camera
 
 import android.content.Context
 import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
 import android.hardware.SensorManager
-import android.hardware.TriggerEvent
-import android.hardware.TriggerEventListener
 import android.util.Log
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
@@ -18,43 +18,48 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.sqrt
 
 /**
- * Wake-on-pickup gate for the front-camera face tracker.
+ * Continuous pickup / orientation detector. Replaces the previous
+ * one-shot TYPE_SIGNIFICANT_MOTION trigger because that fires once,
+ * gives an 8 s window, then needs the user to physically jolt the
+ * phone again before the camera re-activates. The new detector
+ * keeps watching low-power motion sensors and the orientation
+ * estimate so the camera is active **whenever the phone is in a
+ * picked-up state** — held in hand, tilted toward the face — and
+ * deactivates only after the phone has been at rest for
+ * [REST_GRACE_MS] continuously.
  *
- * The camera is the most expensive sensor we run; keeping it
- * bound continuously while the user is just glancing at the phone
- * drains battery for nothing. This detector uses
- * [Sensor.TYPE_SIGNIFICANT_MOTION] — a hardware-batched, ultra-low-
- * power wake sensor Android specifically designed for "the phone
- * has been picked up / put in a pocket / moved" cases — to fire
- * an "active window" only when the user actually moved the phone.
+ * Signals fused:
  *
- * Why TYPE_SIGNIFICANT_MOTION over a continuous accelerometer
- * stream:
- *  - It's a ONE-SHOT trigger: register → wait → fire once →
- *    auto-deregister. We re-register after each fire.
- *  - It runs on a dedicated low-power core and doesn't wake the
- *    main CPU while idle.
- *  - It coalesces all the "is this a pickup?" heuristics in
- *    silicon (typically peak acceleration > ~1.2 g with rotational
- *    component); we don't have to reinvent them.
+ *   - `TYPE_GRAVITY` (or `TYPE_ACCELEROMETER` fallback) → tilt angle
+ *     of the phone from horizontal. Flat-on-a-desk reads ~0°;
+ *     upright-in-hand reads 40-90°.
  *
- * Flow:
- *   1. enable() registers TYPE_SIGNIFICANT_MOTION.
- *   2. User picks up the phone → sensor fires → openWindow().
- *   3. activeWindow = true for [WINDOW_MS] (8 s).
- *   4. FaceTracker can bind/run within that window.
- *   5. Every face detection refreshes the window via
- *      [extendWindow] — keep the camera running while the user is
- *      actually looking at the phone.
- *   6. Window expires → activeWindow = false → camera unbinds
- *      → trigger sensor re-registers.
+ *   - `TYPE_GYROSCOPE` → rotational rate magnitude. > 0.10 rad/s
+ *     for at least one sample within the last [MOTION_HOLD_MS]
+ *     counts as "actively being moved".
  *
- * Falls back to "always-on" when the device has no significant-
- * motion sensor (rare on modern hardware; old emulators sometimes
- * lack it). Better to keep the existing behaviour than to leave
- * the user looking at a permanently empty face.
+ * State:
+ *   active ⇔ (tilt > [TILT_HELD_DEG]) OR (recent motion within
+ *            [MOTION_HOLD_MS])
+ *   at-rest ⇔ tilt ≤ TILT_HELD_DEG AND no recent motion
+ *
+ * Once at-rest persists for [REST_GRACE_MS], the activeWindow flips
+ * false → false propagates to FaceMesh + the FaceTracker bind/unbind.
+ * Tilting the phone back up or moving it immediately flips it true
+ * again — no re-arm step.
+ *
+ * Sensor delay: `SENSOR_DELAY_NORMAL` (≈ 200 ms cadence). The
+ * accelerometer + gyro at that cadence draw ≈ 1 mW combined — orders
+ * of magnitude less than CameraX streaming, so leaving the listeners
+ * registered while the screen is open costs essentially nothing.
+ *
+ * Falls back to "always-on" when neither sensor is available (rare
+ * on modern hardware; old emulators sometimes lack one).
  */
 @Singleton
 class PhonePickupDetector @Inject constructor(
@@ -62,108 +67,175 @@ class PhonePickupDetector @Inject constructor(
 ) {
     private val sensorManager: SensorManager? =
         ctx.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
-    private val triggerSensor: Sensor? =
-        sensorManager?.getDefaultSensor(Sensor.TYPE_SIGNIFICANT_MOTION)
-    private val supportsPickup: Boolean = triggerSensor != null
+    private val gravitySensor: Sensor? = sensorManager?.getDefaultSensor(Sensor.TYPE_GRAVITY)
+        ?: sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+    private val gyroSensor: Sensor? =
+        sensorManager?.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
+    private val supportsPickup: Boolean = gravitySensor != null || gyroSensor != null
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    @Volatile private var closeJob: Job? = null
+    @Volatile private var restGraceJob: Job? = null
     @Volatile private var enabled = false
 
+    // Smoothed tilt angle in degrees (0 = flat, 90 = upright).
+    @Volatile private var tiltDeg: Float = 0f
+    // Timestamp of the last detected motion (gyro mag above threshold).
+    @Volatile private var lastMotionMs: Long = 0L
+    // Whether the held state was last evaluated true. Used to debounce
+    // rapid flickers around the thresholds.
+    @Volatile private var lastHeld: Boolean = false
+
     private val _activeWindow = MutableStateFlow(false)
-    /** True while the camera should be allowed to run. */
+    /** True while the phone is in a picked-up state. The camera path
+     *  binds when this flips true, unbinds when it flips false. */
     val activeWindow: StateFlow<Boolean> = _activeWindow.asStateFlow()
 
-    /** Number of times the wake sensor has fired since enable() —
-     *  surfaced as a debug counter, not used for control. */
-    @Volatile private var triggerCount: Int = 0
-
-    private val triggerListener = object : TriggerEventListener() {
-        override fun onTrigger(event: TriggerEvent?) {
-            triggerCount++
-            Log.d(TAG, "significant motion trigger #$triggerCount — opening window")
-            openWindow()
-            // Significant-motion is one-shot. Re-arm so the NEXT
-            // pickup also opens a window. Re-arm AFTER opening so
-            // the same gesture doesn't immediately re-trigger.
-            registerTrigger()
+    private val gravityListener = object : SensorEventListener {
+        override fun onSensorChanged(event: SensorEvent) {
+            if (event.values.size < 3) return
+            // TYPE_GRAVITY / TYPE_ACCELEROMETER returns m/s² along x, y, z.
+            // Tilt from horizontal = angle between the gravity vector and
+            // the phone's z-axis (which points out the back of the screen
+            // when flat). 0° = flat-face-up or face-down; 90° = upright.
+            val gx = event.values[0]
+            val gy = event.values[1]
+            val gz = event.values[2]
+            val horizMag = sqrt(gx * gx + gy * gy)
+            val instantTilt = Math.toDegrees(
+                atan2(horizMag.toDouble(), abs(gz.toDouble())),
+            ).toFloat()
+            // EMA-smooth so a quick wobble doesn't bounce the state.
+            tiltDeg = tiltDeg * (1f - TILT_EMA) + instantTilt * TILT_EMA
+            evaluateHeld()
         }
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
     }
 
-    /** Start listening for pickup events. Idempotent. When the
-     *  hardware sensor is unavailable, opens the window
-     *  immediately so existing camera flows keep working. */
+    private val gyroListener = object : SensorEventListener {
+        override fun onSensorChanged(event: SensorEvent) {
+            if (event.values.size < 3) return
+            val mag = sqrt(
+                event.values[0] * event.values[0] +
+                    event.values[1] * event.values[1] +
+                    event.values[2] * event.values[2],
+            )
+            if (mag > GYRO_MOTION_THRESHOLD) {
+                lastMotionMs = System.currentTimeMillis()
+                evaluateHeld()
+            }
+        }
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+    }
+
+    /** Start watching. Idempotent. Falls back to always-on when the
+     *  hardware lacks both gravity + gyro. */
     fun enable() {
         if (enabled) return
         enabled = true
         if (!supportsPickup) {
-            Log.w(TAG, "no TYPE_SIGNIFICANT_MOTION sensor — falling back to always-on")
+            Log.w(TAG, "no orientation sensors — falling back to always-on")
             _activeWindow.value = true
             return
         }
-        Log.d(TAG, "enabling pickup detector — opening initial window so the user gets a face on first launch")
-        // Open one window on enable so the user doesn't have to
-        // shake the phone after launching Home for the camera to
-        // engage. First view of the screen = first window.
-        openWindow()
-        registerTrigger()
+        Log.d(TAG, "enabling continuous pickup detector (gravity=${gravitySensor?.name} gyro=${gyroSensor?.name})")
+        // Seed in the active state so the first frame's camera bind
+        // doesn't have to wait for the user to nudge the phone — most
+        // of the time when this method is called, they're already
+        // holding the phone (Home screen just opened).
+        _activeWindow.value = true
+        lastHeld = true
+        lastMotionMs = System.currentTimeMillis()
+        gravitySensor?.let {
+            sensorManager?.registerListener(gravityListener, it, SensorManager.SENSOR_DELAY_NORMAL)
+        }
+        gyroSensor?.let {
+            sensorManager?.registerListener(gyroListener, it, SensorManager.SENSOR_DELAY_NORMAL)
+        }
     }
 
-    /** Stop listening. Idempotent. */
+    /** Stop watching. Idempotent. */
     fun disable() {
         if (!enabled) return
         enabled = false
-        closeJob?.cancel()
-        closeJob = null
-        if (supportsPickup) {
-            runCatching { sensorManager?.cancelTriggerSensor(triggerListener, triggerSensor) }
-        }
+        sensorManager?.unregisterListener(gravityListener)
+        sensorManager?.unregisterListener(gyroListener)
+        restGraceJob?.cancel()
+        restGraceJob = null
         _activeWindow.value = false
+        lastHeld = false
     }
 
-    /** Refresh the active-window timer. Called by FaceTracker every
-     *  successful face detection so the camera keeps running while
-     *  someone is actually using the phone. */
+    /** Hook left from the v6 / v7 API so callers that called this on
+     *  every successful face detection still compile. With the new
+     *  continuous detector the camera is bound whenever the phone is
+     *  in a picked-up state, so we don't need an explicit "extend"
+     *  signal anymore — but we do nudge the lastMotion timestamp so
+     *  a sustained stare doesn't slip into at-rest while the
+     *  accelerometer reads near-still. */
     fun extendWindow() {
-        if (!enabled || !supportsPickup) return
-        if (_activeWindow.value) {
-            // Reset the close-job timer.
-            startCloseTimer()
-        }
-    }
-
-    private fun openWindow() {
         if (!enabled) return
-        _activeWindow.value = true
-        startCloseTimer()
+        lastMotionMs = System.currentTimeMillis()
     }
 
-    private fun startCloseTimer() {
-        closeJob?.cancel()
-        closeJob = scope.launch {
-            delay(WINDOW_MS)
-            _activeWindow.value = false
-            Log.d(TAG, "active window closed after ${WINDOW_MS}ms — camera unbinding")
-        }
-    }
-
-    private fun registerTrigger() {
-        if (!supportsPickup) return
-        runCatching {
-            sensorManager?.requestTriggerSensor(triggerListener, triggerSensor)
-        }.onFailure {
-            Log.w(TAG, "requestTriggerSensor failed: ${it.message}")
+    /** Combine tilt + recent-motion into the held verdict. Debounced
+     *  via the [REST_GRACE_MS] timer so a brief flat moment doesn't
+     *  immediately unbind the camera. */
+    private fun evaluateHeld() {
+        val now = System.currentTimeMillis()
+        val recentMotion = (now - lastMotionMs) < MOTION_HOLD_MS
+        val isUpright = tiltDeg > TILT_HELD_DEG
+        val held = recentMotion || isUpright
+        if (held && !lastHeld) {
+            // Transition at-rest → held: flip immediately.
+            lastHeld = true
+            restGraceJob?.cancel()
+            restGraceJob = null
+            _activeWindow.value = true
+            Log.d(TAG, "held=true (tilt=$tiltDeg, recentMotion=$recentMotion)")
+        } else if (!held && lastHeld) {
+            // Transition held → maybe-at-rest. Start the grace timer;
+            // if motion picks up again before it fires, cancel.
+            if (restGraceJob == null) {
+                restGraceJob = scope.launch {
+                    delay(REST_GRACE_MS)
+                    lastHeld = false
+                    _activeWindow.value = false
+                    restGraceJob = null
+                    Log.d(TAG, "held=false (rested for ${REST_GRACE_MS}ms)")
+                }
+            }
         }
     }
 
     companion object {
         private const val TAG = "Mythara/Pickup"
 
-        /** How long the camera stays bound after a pickup event.
-         *  8 s is enough for: glance → face mesh forms (~1.8 s
-         *  gather) → user reads → looks away. Each face detection
-         *  resets the timer via [extendWindow] so a sustained
-         *  look-at extends the window indefinitely. */
-        private const val WINDOW_MS = 8_000L
+        /** Tilt threshold (degrees from horizontal) above which the
+         *  phone reads as "held in hand or propped up". 15° gives a
+         *  comfortable margin — flat-on-a-table reads ~0°, even
+         *  glance-angle on a desk wedge reads ~25°. */
+        private const val TILT_HELD_DEG = 15f
+
+        /** EMA smoothing for the tilt estimate. 0.18 gives a ~6-frame
+         *  time constant at SENSOR_DELAY_NORMAL — fast enough to
+         *  follow a hand pickup, slow enough to ignore single-sample
+         *  noise. */
+        private const val TILT_EMA = 0.18f
+
+        /** Gyro magnitude (rad/s) above which we record "phone is
+         *  actively being moved". 0.10 rad/s ≈ 5.7°/s — slow enough
+         *  to catch a deliberate orientation change, fast enough to
+         *  ignore micro-tremor from the user's pulse on a held phone. */
+        private const val GYRO_MOTION_THRESHOLD = 0.10f
+
+        /** How long after the last motion we still treat the phone as
+         *  held. Sustained stares are common; 4 s tolerates that
+         *  comfortably without forcing the camera off when the user
+         *  just isn't moving. */
+        private const val MOTION_HOLD_MS = 4_000L
+
+        /** Grace period before the phone goes from held → at-rest.
+         *  Prevents flicker around the tilt threshold. */
+        private const val REST_GRACE_MS = 2_500L
     }
 }
