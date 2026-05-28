@@ -646,9 +646,49 @@ fun FaceMesh(
 
             val baseR = p.size * minOf(w, h)
             val a = cycleAlpha
-            drawCircle(color.copy(alpha = ((0.08f + 0.10f * coreA) * a).coerceIn(0f, 0.5f)), baseR * 2.6f, Offset(cx, cy))
-            drawCircle(color.copy(alpha = ((0.40f * coreA + 0.08f) * a).coerceIn(0f, 0.9f)), baseR * 1.4f, Offset(cx, cy))
-            drawCircle(color.copy(alpha = ((0.85f * coreA + 0.10f) * a).coerceIn(0f, 1f)), baseR, Offset(cx, cy))
+            // Five-layer particle glow so the shape reads as luminous
+            // dots against ANY skin backdrop (Spatial light lavender,
+            // Aurora cyan/blue, Living Rose pink). The outer two layers
+            // use BlendMode.Plus (additive) so they brighten the
+            // background rather than darkening it — neon-point feel.
+            // Innermost layer is the same near-white "hot core" used
+            // by stars in dark-sky photos so each particle has a
+            // distinct centre even when the body colour matches the
+            // backdrop hue.
+            val outerGlowAlpha = ((0.06f + 0.07f * coreA) * a).coerceIn(0f, 0.40f)
+            val midGlowAlpha = ((0.14f + 0.10f * coreA) * a).coerceIn(0f, 0.55f)
+            val bodyAlpha = ((0.40f * coreA + 0.10f) * a).coerceIn(0f, 0.95f)
+            val coreAlpha = ((0.85f * coreA + 0.10f) * a).coerceIn(0f, 1f)
+            val hotAlpha = (0.60f * coreA * a).coerceIn(0f, 0.95f)
+            // Outer halo — broadest spread, very soft, additive so it
+            // brightens through the backdrop instead of muddying it.
+            drawCircle(
+                color = color.copy(alpha = outerGlowAlpha),
+                radius = baseR * 4.5f,
+                center = Offset(cx, cy),
+                blendMode = androidx.compose.ui.graphics.BlendMode.Plus,
+            )
+            // Mid glow — closer, denser, still additive. Builds the
+            // "luminous corona" feel.
+            drawCircle(
+                color = color.copy(alpha = midGlowAlpha),
+                radius = baseR * 2.6f,
+                center = Offset(cx, cy),
+                blendMode = androidx.compose.ui.graphics.BlendMode.Plus,
+            )
+            // Body — saturated brand colour, normal blend.
+            drawCircle(color.copy(alpha = bodyAlpha), baseR * 1.4f, Offset(cx, cy))
+            // Core — saturated, the particle's main visible mass.
+            drawCircle(color.copy(alpha = coreAlpha), baseR, Offset(cx, cy))
+            // Hot centre — near-white for the unmistakable "point of
+            // light" look, additive so it punches through dark + light
+            // backgrounds equally.
+            drawCircle(
+                color = androidx.compose.ui.graphics.Color.White.copy(alpha = hotAlpha),
+                radius = baseR * 0.45f,
+                center = Offset(cx, cy),
+                blendMode = androidx.compose.ui.graphics.BlendMode.Plus,
+            )
         }
     }
 }
