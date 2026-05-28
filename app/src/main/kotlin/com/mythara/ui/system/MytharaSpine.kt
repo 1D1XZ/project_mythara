@@ -236,8 +236,12 @@ private fun LauncherPanel(
             .border(1.dp, MytharaColors.SurfaceHigh, RoundedCornerShape(12.dp))
             .padding(10.dp),
     ) {
+        // v7 P7+ — outer column NO LONGER has its own verticalScroll;
+        // the AppDock below scrolls internally (bounded height) and
+        // Compose throws "Nested scrolling not supported" if both
+        // scroll. The nav rows below the dock are a fixed count so
+        // the total panel height fits without needing outer scroll.
         Column(
-            modifier = Modifier.verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Row(

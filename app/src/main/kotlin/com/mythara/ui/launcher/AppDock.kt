@@ -6,39 +6,35 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
@@ -49,10 +45,8 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
@@ -67,7 +61,6 @@ class AppDockViewModel @Inject constructor(
     private val _apps = MutableStateFlow<List<InstalledAppsProvider.App>>(emptyList())
     val apps: StateFlow<List<InstalledAppsProvider.App>> = _apps.asStateFlow()
 
-    // Lazy icon cache — per-package ImageBitmap once decoded.
     private val _icons = MutableStateFlow<Map<String, ImageBitmap>>(emptyMap())
     val icons: StateFlow<Map<String, ImageBitmap>> = _icons.asStateFlow()
 
@@ -75,12 +68,10 @@ class AppDockViewModel @Inject constructor(
         viewModelScope.launch {
             val list = provider.list()
             _apps.value = list
-            // Decode icons in PARALLEL so the dock fills in fast
-            // instead of waiting on sequential PackageManager calls.
-            // Each async fans out on Dispatchers.IO; we accumulate
-            // results into a mutex-guarded map and snapshot the
-            // StateFlow as each icon arrives → the UI updates
-            // progressively rather than after the whole batch.
+            // Decode icons in PARALLEL so the dock fills in fast.
+            // Each async fans out on Dispatchers.IO; results are
+            // accumulated into a mutex-guarded map and the StateFlow
+            // snapshots after every insertion → progressive UI.
             val mutex = kotlinx.coroutines.sync.Mutex()
             val map = LinkedHashMap<String, ImageBitmap>(list.size)
             val jobs = list.map { app ->
@@ -98,21 +89,19 @@ class AppDockViewModel @Inject constructor(
         }
     }
 
-    fun launch(packageName: String) {
-        // The provider returns a launch intent; the actual launch goes
-        // through the host (which holds Context). We just expose the
-        // package; the @Composable invokes provider.launchIntent.
-    }
-
     val provider_: InstalledAppsProvider get() = provider
 }
 
 /**
- * macOS-style magnifying app dock for the spine launcher panel.
- * Renders every installed launcher app as a circular icon in a
- * horizontal scroll row; while the user presses + drags across the
- * dock, icons near the touch point scale up via a Gaussian falloff
- * (classic fisheye). Tap an icon to launch its app.
+ * Vertical macOS-style magnifying app dock for the spine launcher
+ * panel (v7 P7+). Renders every installed launcher app as a
+ * circular icon STACKED VERTICALLY in a scrollable column; while
+ * the user presses + drags up/down across the dock, icons near the
+ * touch point scale up via a Gaussian falloff (classic fisheye).
+ * Tap an icon to launch its app.
+ *
+ * Bounded height ([DOCK_HEIGHT_DP]) so the dock scrolls internally
+ * without nesting into the launcher panel's outer column.
  */
 @Composable
 fun AppDock(
@@ -129,65 +118,66 @@ fun AppDock(
         return
     }
 
-    // Pointer X in the dock's local coords (px). Null = no touch active
-    // → all icons at base scale.
-    var pointerX by remember { mutableStateOf<Float?>(null) }
+    // Pointer Y in dock-local coords (px), incl. scroll offset so the
+    // magnification follows the actual icon under the finger even when
+    // the user has scrolled. Null = no touch → all icons at base.
+    var pointerY by remember { mutableStateOf<Float?>(null) }
     val basePx = with(density) { BASE_DP.dp.toPx() }
     val spacingPx = with(density) { SPACING_DP.dp.toPx() }
-    val containerHeightPx = with(density) { (BASE_DP * MAX_SCALE + 24f).dp.toPx() }
+    val topPadPx = with(density) { TOP_PAD_DP.dp.toPx() }
+    val sigmaPx = MAGNIFY_SIGMA_DP * density.density
 
     val scrollState = rememberScrollState()
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(with(density) { containerHeightPx.toDp() })
+            .heightIn(max = DOCK_HEIGHT_DP.dp)
             .pointerInput(Unit) {
                 awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-                    pointerX = down.position.x + scrollState.value
-                    var lastX = down.position.x
+                    val down = awaitFirstDown(
+                        requireUnconsumed = false,
+                        pass = PointerEventPass.Initial,
+                    )
+                    pointerY = down.position.y + scrollState.value
                     while (true) {
                         val ev = awaitPointerEvent(PointerEventPass.Initial)
                         val ch = ev.changes.firstOrNull { it.id == down.id } ?: break
                         if (!ch.pressed) {
-                            pointerX = null
+                            pointerY = null
                             break
                         }
-                        pointerX = ch.position.x + scrollState.value
-                        lastX = ch.position.x
+                        pointerY = ch.position.y + scrollState.value
                     }
-                    @Suppress("UNUSED_VARIABLE") val _x = lastX
                 }
             }
-            .horizontalScroll(scrollState),
-        contentAlignment = Alignment.CenterStart,
+            .verticalScroll(scrollState),
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = TOP_PAD_DP.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             apps.forEachIndexed { i, app ->
-                // Local x-center of icon i in the dock's coordinate
-                // system (Row left edge + accumulated widths + half).
-                val centerX = 12f * density.density + // padding start in px
-                    i * (basePx + spacingPx) + basePx * 0.5f
-                val px = pointerX
-                val scale = if (px == null) 1f else gaussianMagnify(distance = abs(px - centerX), maxScale = MAX_SCALE, sigmaPx = MAGNIFY_SIGMA_DP * density.density)
-
+                val centerY = topPadPx + i * (basePx + spacingPx) + basePx * 0.5f
+                val py = pointerY
+                val scale = if (py == null) 1f else gaussianMagnify(
+                    distance = abs(py - centerY),
+                    maxScale = MAX_SCALE,
+                    sigmaPx = sigmaPx,
+                )
                 DockIcon(
                     app = app,
                     icon = icons[app.packageName],
                     scale = scale,
                     onTap = {
-                        // Launch via the provider's intent (avoids
-                        // exposing Context in the VM).
                         val intent = vm.provider_.launchIntent(app.packageName)
                         if (intent != null) runCatching { ctx.startActivity(intent) }
                         onLaunch(app.packageName)
                     },
                 )
-                if (i != apps.lastIndex) Spacer(Modifier.width(SPACING_DP.dp))
+                if (i != apps.lastIndex) Spacer(Modifier.height(SPACING_DP.dp))
             }
         }
     }
@@ -235,7 +225,11 @@ private fun gaussianMagnify(distance: Float, maxScale: Float, sigmaPx: Float): F
     return 1f + (maxScale - 1f) * bell
 }
 
-private const val BASE_DP = 44       // base icon size (dp)
-private const val SPACING_DP = 8     // space between icons (dp)
-private const val MAX_SCALE = 1.8f   // icon under the touch grows ~1.8×
+private const val BASE_DP = 44             // base icon size (dp)
+private const val SPACING_DP = 6           // vertical space between icons (dp)
+private const val TOP_PAD_DP = 4
+private const val MAX_SCALE = 1.8f         // icon under the touch grows ~1.8×
 private const val MAGNIFY_SIGMA_DP = 56f
+/** Bounded height — dock scrolls internally without nesting into the
+ *  launcher panel's outer column. */
+private const val DOCK_HEIGHT_DP = 400
