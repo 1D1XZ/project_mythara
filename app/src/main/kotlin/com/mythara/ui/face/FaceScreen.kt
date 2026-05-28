@@ -202,6 +202,38 @@ fun FaceMesh(
     pose: FaceTracker.Pose,
     modifier: Modifier = Modifier,
 ) {
+    // Hilt entry point — pull the EmotionDetector + MoodHistoryStore
+    // out of the singleton graph. The detector receives every pose
+    // tick we observe below; the store records each completed session
+    // so the next pick can lean on the user's recent emotional pattern.
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val moodEntry = remember {
+        dagger.hilt.android.EntryPointAccessors.fromApplication(
+            ctx.applicationContext, FaceMeshMoodEntryPoint::class.java,
+        )
+    }
+    val emotionDetector = remember { moodEntry.emotionDetector() }
+    val historyStore = remember { moodEntry.moodHistoryStore() }
+
+    // Stream pose updates into the EmotionDetector — fuses face smile +
+    // HR delta + voice tone into a mood label and publishes via
+    // MoodSink so the entire app's reactive surfaces (wallpaper,
+    // amulet, mood-tinted theme) light up too.
+    LaunchedEffect(pose) {
+        emotionDetector.pushFacePose(pose)
+    }
+    val emotionReading by emotionDetector.reading.collectAsState()
+
+    // Pre-load the recent mood history once on composition so the
+    // shape pick can lean on it; refreshed each session inside the
+    // session LaunchedEffect below.
+    var recentMoods by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf<List<String>>(emptyList())
+    }
+    LaunchedEffect(Unit) {
+        recentMoods = runCatching { historyStore.recentMoods() }.getOrDefault(emptyList())
+    }
+
     val particles = remember { buildParticles() }
     // SHAPE particles' indices + a per-coordinate-axis backing store.
     // The shape coords get re-rolled each new session below; keeping
@@ -227,10 +259,27 @@ fun FaceMesh(
         androidx.compose.runtime.mutableStateOf(ParticleShapes.Kind.Icosahedron)
     }
     val rotationAxis = remember { FloatArray(3) }
+    // Session start + end timestamps so we can write the session's
+    // duration into MoodHistoryStore when the face leaves.
+    var sessionStartMs by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableLongStateOf(0L)
+    }
     LaunchedEffect(sessionId) {
         val rnd = Random(System.nanoTime() xor sessionId.toLong().shl(13))
-        val kinds = ParticleShapes.Kind.entries.toTypedArray()
-        val kind = kinds[rnd.nextInt(kinds.size)]
+        // Read fresh recent history each session so a record we made
+        // last time influences this pick.
+        recentMoods = runCatching {
+            com.mythara.face.MoodHistoryStore.let { historyStore.recentMoods() }
+        }.getOrDefault(emptyList())
+        // Current mood reading from EmotionDetector — may still be
+        // null on the very first frame, in which case the shape pick
+        // falls back to the uniform distribution.
+        val mood = com.mythara.branding.MoodSink.current()
+        val kind = com.mythara.face.ShapeMoodMapping.pickShape(
+            mood = mood,
+            recentHistory = recentMoods,
+            rnd = rnd,
+        )
         shapeKindLabel = kind
         ParticleShapes.sampleShape(
             kind = kind,
@@ -240,6 +289,34 @@ fun FaceMesh(
             xs = shapeXs, ys = shapeYs, zs = shapeZs,
         )
         ParticleShapes.randomUnitVector(rnd, rotationAxis)
+        sessionStartMs = System.currentTimeMillis()
+    }
+    // When the face leaves, persist the session that just ended so
+    // the next pick can lean on this user's pattern over time.
+    LaunchedEffect(pose.present) {
+        if (!pose.present && sessionStartMs > 0L && sessionId > 0) {
+            val reading = emotionDetector.reading.value
+            val mood = reading?.mood ?: com.mythara.branding.MoodSink.current() ?: "calm"
+            val intensity = reading?.intensity ?: 0.5f
+            val durationMs = (System.currentTimeMillis() - sessionStartMs).coerceAtLeast(0L)
+            // Only record sessions where the user actually engaged
+            // for a beat (≥ 500 ms) — otherwise transient flicker
+            // events pollute the history.
+            if (durationMs >= 500L) {
+                runCatching {
+                    historyStore.record(
+                        com.mythara.face.MoodHistoryStore.MoodSession(
+                            tsMs = sessionStartMs,
+                            mood = mood,
+                            intensity = intensity,
+                            durationMs = durationMs,
+                            shapeKind = shapeKindLabel.name,
+                        ),
+                    )
+                }
+            }
+            sessionStartMs = 0L
+        }
     }
     // Scratch buffer the per-frame Rodrigues rotation writes into.
     val rotScratch = remember { FloatArray(3) }
@@ -343,7 +420,14 @@ fun FaceMesh(
         // Pre-compute the per-frame rotation factor for SHAPE
         // particles. Cached outside the loop because every SHAPE
         // particle uses the same (cosA, sinA) pair this frame.
-        val rotAng = timeSec * SHAPE_ROT_HZ * 2f * PI.toFloat()
+        // Rotation rate is mood-modulated: excited → faster spin,
+        // sad / calm → slower. Falls back to SHAPE_ROT_HZ when no
+        // mood reading exists yet.
+        val moodNow = emotionReading?.mood
+        val intensityNow = emotionReading?.intensity ?: 0.5f
+        val rotHz = com.mythara.face.ShapeMoodMapping.rotationRateHz(moodNow, intensityNow)
+        val glowMul = com.mythara.face.ShapeMoodMapping.glowMultiplier(moodNow, intensityNow)
+        val rotAng = timeSec * rotHz * 2f * PI.toFloat()
         val cosA = cos(rotAng)
         val sinA = sin(rotAng)
         val axKx = rotationAxis[0]
@@ -403,7 +487,7 @@ fun FaceMesh(
                     txN = CIRCLE_CX + rx + gazeX * SHAPE_GAZE_MULT
                     tyN = CIRCLE_CY + ry * aspect + gazeY * SHAPE_GAZE_MULT * aspect
                     color = particleColor(ringStops, p.hueU, timeSec, speaking)
-                    coreA = (0.30f + 0.65f * depth01) * p.glow
+                    coreA = (0.30f + 0.65f * depth01) * p.glow * glowMul
                     // While speaking, gently breathe the shape's
                     // alpha so the user reads "active" without the
                     // disruptive outward sunburst the old CIRCLE
@@ -636,5 +720,18 @@ private fun buildParticles(): List<FParticle> {
         )
     }
     return out
+}
+
+/**
+ * Hilt entry point — gives the [FaceMesh] composable access to the
+ * singleton-graph [EmotionDetector] + [MoodHistoryStore] without
+ * making the whole composable a Hilt entry. Application-scoped, both
+ * are cheap to retrieve.
+ */
+@dagger.hilt.EntryPoint
+@dagger.hilt.InstallIn(dagger.hilt.components.SingletonComponent::class)
+internal interface FaceMeshMoodEntryPoint {
+    fun emotionDetector(): com.mythara.face.EmotionDetector
+    fun moodHistoryStore(): com.mythara.face.MoodHistoryStore
 }
 

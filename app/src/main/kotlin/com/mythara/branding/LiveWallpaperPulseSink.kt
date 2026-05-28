@@ -103,6 +103,16 @@ object LiveWallpaperPulseSink {
         return if (System.currentTimeMillis() - ts <= maxStaleMs) bpmValue else null
     }
 
+    /** Rolling-window resting-rate baseline (BPM). Returns 0f until
+     *  the renderer has at least [MIN_BASELINE_SAMPLES] readings —
+     *  callers treat 0 as "no baseline available yet". Used by
+     *  [com.mythara.face.EmotionDetector] to compute an arousal
+     *  signal scaled to the USER's own resting rate rather than an
+     *  absolute threshold (60 bpm is a stress reading for an athlete
+     *  and a calm reading for a sedentary user — the delta against
+     *  their own baseline is what carries the arousal information). */
+    fun baseline(): Float = if (baselineN >= MIN_BASELINE_SAMPLES) baselineMean else 0f
+
     /** Default staleness window — 3 min. Long enough to ride out the
      *  Fitbit / Samsung Health batch cadence (typically 1-2 min)
      *  without flapping the wallpaper between live + fallback states. */

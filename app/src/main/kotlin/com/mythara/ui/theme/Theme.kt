@@ -66,13 +66,33 @@ fun MytharaTheme(content: @Composable () -> Unit) {
     val palette = PaletteCatalog.forSkin(skin, isDark)
     val spec = SkinCatalog.forSkin(skin)
 
+    // Mood tint — when the EmotionDetector publishes a fresh mood
+    // (face + HR + voice fusion), every brand accent in the palette
+    // rotates around the HSV colour wheel toward the mood's bias.
+    // Surface / Bg / Fg are untouched so legibility stays constant;
+    // only the brand accents shift. See MoodTint for the per-mood
+    // hue / saturation / value deltas.
+    val moodShift = MoodTint.rememberCurrentShift()
+    val tintedPalette = remember(palette, moodShift) {
+        if (moodShift == MoodTint.forLabel(null)) palette
+        else palette.copy(
+            Charple = MoodTint.tint(palette.Charple, moodShift),
+            Bok = MoodTint.tint(palette.Bok, moodShift),
+            Malibu = MoodTint.tint(palette.Malibu, moodShift),
+            Mustard = MoodTint.tint(palette.Mustard, moodShift),
+            Sriracha = MoodTint.tint(palette.Sriracha, moodShift),
+            Citron = MoodTint.tint(palette.Citron, moodShift),
+            Julep = MoodTint.tint(palette.Julep, moodShift),
+        )
+    }
+
     CompositionLocalProvider(
-        LocalMythPalette provides palette,
+        LocalMythPalette provides tintedPalette,
         LocalSkinSpec provides spec,
         LocalUiMode provides uiMode,
     ) {
         MaterialTheme(
-            colorScheme = palette.toColorScheme(isDark),
+            colorScheme = tintedPalette.toColorScheme(isDark),
             typography = MytharaTypography,
             content = content,
         )

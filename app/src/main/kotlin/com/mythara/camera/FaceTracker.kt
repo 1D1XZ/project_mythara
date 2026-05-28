@@ -53,6 +53,10 @@ class FaceTracker @Inject constructor(
         val roll: Float = 0f,
         val leftEyeOpen: Float = 1f,
         val rightEyeOpen: Float = 1f,
+        /** ML Kit's `smilingProbability` in [0, 1]. EMA-smoothed the
+         *  same way the eye-open fields are. Fed into the EmotionDetector
+         *  along with HR + voice-tone signals to derive a mood label. */
+        val smile: Float = 0f,
     )
 
     private val _pose = MutableStateFlow(Pose())
@@ -202,6 +206,7 @@ class FaceTracker @Inject constructor(
                 val roll = (-face.headEulerAngleZ / ROLL_RANGE).coerceIn(-1f, 1f)
                 val le = face.leftEyeOpenProbability ?: 1f
                 val re = face.rightEyeOpenProbability ?: 1f
+                val sm = face.smilingProbability ?: 0f
                 _pose.value = Pose(
                     present = true,
                     // snap straight to the first reading, then EMA-smooth
@@ -210,6 +215,10 @@ class FaceTracker @Inject constructor(
                     roll = if (first) roll else ema(cur.roll, roll, ANGLE_SMOOTH),
                     leftEyeOpen = if (first) le else ema(cur.leftEyeOpen, le, EYE_SMOOTH),
                     rightEyeOpen = if (first) re else ema(cur.rightEyeOpen, re, EYE_SMOOTH),
+                    // Smile smoothing rate matches eye-open (snappy enough
+                    // for the EmotionDetector to pick up a real smile
+                    // within ~0.4 s of it appearing).
+                    smile = if (first) sm else ema(cur.smile, sm, EYE_SMOOTH),
                 )
             }
             .addOnFailureListener { Log.w(TAG, "detect failed: ${it.message}") }
