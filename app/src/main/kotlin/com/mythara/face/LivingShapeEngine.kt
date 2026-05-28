@@ -56,7 +56,16 @@ class LivingShapeEngine @Inject constructor(
 ) {
 
     data class LivingShape(
-        val kind: ParticleShapes.Kind,
+        /** Generator family for this session's shape. Each family
+         *  rolls dramatically different random forms — and within a
+         *  family, two rolls produce visually distinct geometries.
+         *  So "Supershape twice in a row" still gives the user a
+         *  different alien form each time. */
+        val family: CreativeShapes.Family,
+        /** Random seed used to mint this session's shape. Persisted
+         *  so the FaceMesh can re-render the same shape across
+         *  recompositions without re-rolling. */
+        val seed: Long,
         /** Unit vector — the axis the shape spins around this session.
          *  Re-rolled on every new pickup so a different geometry tilts
          *  in a different direction. */
@@ -82,7 +91,7 @@ class LivingShapeEngine @Inject constructor(
         override fun equals(other: Any?): Boolean {
             if (this === other) return true
             if (other !is LivingShape) return false
-            return kind == other.kind &&
+            return family == other.family && seed == other.seed &&
                 rotationAxis.contentEquals(other.rotationAxis) &&
                 rotationRateHz == other.rotationRateHz &&
                 glowMultiplier == other.glowMultiplier &&
@@ -92,7 +101,8 @@ class LivingShapeEngine @Inject constructor(
                 active == other.active && sessionStartMs == other.sessionStartMs
         }
         override fun hashCode(): Int {
-            var r = kind.hashCode()
+            var r = family.hashCode()
+            r = 31 * r + seed.hashCode()
             r = 31 * r + rotationAxis.contentHashCode()
             r = 31 * r + rotationRateHz.hashCode()
             r = 31 * r + glowMultiplier.hashCode()
@@ -107,11 +117,12 @@ class LivingShapeEngine @Inject constructor(
     }
 
     private val initial = LivingShape(
-        kind = ParticleShapes.Kind.Icosahedron,
+        family = CreativeShapes.Family.SphericalHarmonic,
+        seed = 0L,
         rotationAxis = floatArrayOf(0f, 1f, 0f),
         rotationRateHz = 0.30f,
         glowMultiplier = 1.0f,
-        particleCount = 600,
+        particleCount = 800,
         mood = null,
         intensity = 0.4f,
         socialTemperature = 0.3f,
@@ -122,9 +133,13 @@ class LivingShapeEngine @Inject constructor(
     private val _state = MutableStateFlow(initial)
     val state: StateFlow<LivingShape> = _state.asStateFlow()
 
-    /** Sliding window of the last 4 shape kinds — feeds
-     *  [ShapeMoodMapping.pickShape]'s never-repeat guarantee. */
-    private val recentKinds = ArrayDeque<ParticleShapes.Kind>()
+    /** Sliding window of the last 4 family choices — feeds the
+     *  CreativeShapes family-pick so we don't get the same generator
+     *  twice in a row. Within a family every roll is already
+     *  visually unique (different random params), so a 4-deep
+     *  family window plus per-roll randomness gives essentially
+     *  unbounded shape novelty. */
+    private val recentFamilies = ArrayDeque<CreativeShapes.Family>()
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -149,29 +164,44 @@ class LivingShapeEngine @Inject constructor(
      *  with the never-repeat guarantee + records the start time so
      *  the session-end hook knows the duration. */
     suspend fun startSession() {
-        val rnd = Random(System.nanoTime())
+        // Per-session seed — captured into LivingShape so FaceMesh can
+        // re-derive the exact same shape across recompositions
+        // without state drift.
+        val seed = System.nanoTime() xor Random.nextLong()
+        val rnd = Random(seed)
         val mood = MoodSink.current()
         val intensity = emotionDetector.reading.value?.intensity ?: 0.5f
-        val recentMoods = runCatching { historyStore.recentMoods() }
-            .getOrDefault(emptyList())
-        val kind = ShapeMoodMapping.pickShape(
-            mood = mood,
-            recentHistory = recentMoods,
-            recentShapes = recentKinds.toList(),
-            rnd = rnd,
-        )
-        // Slide the new pick onto the recent window.
-        recentKinds.addFirst(kind)
-        while (recentKinds.size > 4) recentKinds.removeLast()
-
+        // Roll the family with mood-bias but avoid the most-recent ones.
+        // Within a family every roll is already visually unique
+        // (different random parameters), so a 2-deep family-avoid plus
+        // CreativeShapes' internal randomness gives essentially
+        // unbounded novel forms.
+        val avoid = recentFamilies.take(2).toSet()
+        var family = CreativeShapes.Family.SphericalHarmonic
+        // 6 attempts then accept whatever — generous; never blocks.
+        for (attempt in 0 until 6) {
+            val candidateRng = Random(seed + attempt * 7919L)
+            family = CreativeShapes.pickFamilyExternal(mood, candidateRng)
+            if (family !in avoid) break
+        }
+        recentFamilies.addFirst(family)
+        while (recentFamilies.size > 4) recentFamilies.removeLast()
+        // Random rotation axis.
         val axis = FloatArray(3)
-        ParticleShapes.randomUnitVector(rnd, axis)
+        val u = rnd.nextFloat() * 2f - 1f
+        val phi = rnd.nextFloat() * 2f * kotlin.math.PI.toFloat()
+        val rxy = kotlin.math.sqrt(1f - u * u)
+        axis[0] = rxy * kotlin.math.cos(phi)
+        axis[1] = rxy * kotlin.math.sin(phi)
+        axis[2] = u
+
         _state.value = _state.value.copy(
-            kind = kind,
+            family = family,
+            seed = seed,
             rotationAxis = axis,
             rotationRateHz = ShapeMoodMapping.rotationRateHz(mood, intensity),
             glowMultiplier = ShapeMoodMapping.glowMultiplier(mood, intensity),
-            particleCount = ShapeMoodMapping.particleCount(kind, mood, intensity),
+            particleCount = CreativeShapes.particleCount(family, mood, intensity),
             mood = mood,
             intensity = intensity,
             active = true,
@@ -204,7 +234,7 @@ class LivingShapeEngine @Inject constructor(
                     mood = cur.mood ?: "calm",
                     intensity = cur.intensity,
                     durationMs = durationMs,
-                    shapeKind = cur.kind.name,
+                    shapeKind = cur.family.name,
                 ),
             )
         }
@@ -218,7 +248,7 @@ class LivingShapeEngine @Inject constructor(
             append(cur.mood ?: "calm")
             append(" (intensity ").append("%.2f".format(cur.intensity)).append(")")
             append(" for ").append(durationSec).append("s")
-            append(", shape=").append(cur.kind.name.lowercase())
+            append(", shape=").append(cur.family.name.lowercase())
             append(", social=").append("%.2f".format(cur.socialTemperature))
         }
         runCatching {
@@ -229,7 +259,7 @@ class LivingShapeEngine @Inject constructor(
                 facets = listOf(
                     "kind:emotional-session",
                     "mood:${cur.mood ?: "calm"}",
-                    "shape:${cur.kind.name.lowercase()}",
+                    "shape:${cur.family.name.lowercase()}",
                     "target:self",
                     "social:${(cur.socialTemperature * 10).toInt()}",
                 ),

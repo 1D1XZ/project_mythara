@@ -261,21 +261,11 @@ fun FaceMesh(
     LaunchedEffect(pose.present) {
         if (pose.present) sessionId++
     }
-    var shapeKindLabel by androidx.compose.runtime.remember {
-        androidx.compose.runtime.mutableStateOf(ParticleShapes.Kind.Icosahedron)
-    }
     val rotationAxis = remember { FloatArray(3) }
     // Session start + end timestamps so we can write the session's
     // duration into MoodHistoryStore when the face leaves.
     var sessionStartMs by androidx.compose.runtime.remember {
         androidx.compose.runtime.mutableLongStateOf(0L)
-    }
-    // Sliding window of the most-recent shape kinds — fed into
-    // ShapeMoodMapping.pickShape so the next pick is GUARANTEED
-    // different from the last few. Implements the "shape must
-    // always evolve, never repeat from old" rule.
-    var recentShapeKinds by androidx.compose.runtime.remember {
-        androidx.compose.runtime.mutableStateOf<List<ParticleShapes.Kind>>(emptyList())
     }
     // How many of the pre-allocated SHAPE particles to actually draw
     // this session. The pool is sized at the MAX ceiling (1500); the
@@ -287,21 +277,22 @@ fun FaceMesh(
     }
     LaunchedEffect(sessionId) {
         // Hand the new-session roll to LivingShapeEngine — it owns the
-        // never-repeat guarantee, the particle count + rotation rate
-        // pick, the axis randomisation, and pushes the resulting state
-        // into its StateFlow so FaceMesh can render from `living`.
+        // family pick (Supershape / SphericalHarmonic / LissajousKnot /
+        // MetaballBlob / RandomPolytope), the random seed, the axis,
+        // and pushes everything into its StateFlow.
         livingShapeEngine.startSession()
         val s = livingShapeEngine.state.value
-        shapeKindLabel = s.kind
-        recentShapeKinds = (listOf(s.kind) + recentShapeKinds).take(4)
         activeShapeCount = s.particleCount.coerceAtMost(shapeIndices.size)
-        // Re-sample shape coords for the freshly-picked kind.
-        val rnd = Random(System.nanoTime() xor sessionId.toLong().shl(13))
-        ParticleShapes.sampleShape(
-            kind = s.kind,
+        // Mint the procedural shape using the engine's seed so the same
+        // session always re-renders the same form on recomposition. The
+        // family + seed determine the exact geometry; CreativeShapes'
+        // generators write the (x, y, z) coords into our flat arrays.
+        com.mythara.face.CreativeShapes.mintRandomShape(
+            seed = s.seed,
             n = activeShapeCount,
             radius = SHAPE_RADIUS,
-            rnd = rnd,
+            mood = s.mood,
+            intensity = s.intensity,
             xs = shapeXs, ys = shapeYs, zs = shapeZs,
         )
         // Mirror the engine's axis into our local FloatArray (the
